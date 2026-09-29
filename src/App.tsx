@@ -1,21 +1,288 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
-  MessageSquare, UserCircle2, Bot, Send, User, 
-  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, X, MessageCircle
+  MessageSquare, UserCircle2, Bot, Send, User, X,
+  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { supabase } from './supabase';
+import bcrypt from 'bcryptjs';
 
-const MOCK_CONVERSATIONS = [
-  { id: 1, name: 'Juan Pérez', phone: '+54 9 11 1234-5678', status: 'Nueva', lastMessage: 'Hola, quisiera saber...', mode: 'AI_SUGGEST', time: '10:32 AM', unread: 2 },
-  { id: 2, name: '', phone: '+54 9 11 8765-4321', status: 'Esperando operador', lastMessage: 'Necesito hablar con un humano', mode: 'HUMAN', time: '10:15 AM', unread: 0 },
-  { id: 3, name: 'Pedro Rodríguez', phone: '+54 9 11 3333-4444', status: 'Atendida', lastMessage: 'Gracias por la información', mode: 'CLOSED', time: 'Ayer', unread: 0 },
-];
+const tickSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+const bellSound = new Audio('https://assets.mixkit.co/active_storage/sfx/237/237-preview.mp3');
 
 export default function App() {
-  const [activeView, setActiveView] = useState('chat'); // 'chat' or 'knowledge'
-  const [activeConv, setActiveConv] = useState(MOCK_CONVERSATIONS[0]);
+  const [activeView, setActiveView] = useState('chat');
+  const [historyContacts, setHistoryContacts] = useState<any[]>([]);
+  const [expandedContact, setExpandedContact] = useState<number|null>(null);
+  const [contactConvs, setContactConvs] = useState<Record<number, any[]>>({});
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [activeConv, setActiveConv] = useState<any>(null);
+  const [messages, setMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
-  const [aiSuggestion, setAiSuggestion] = useState("¡Hola Juan! Claro, podemos enviarte el precio. ¿Para qué fechas buscas alojamiento?");
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+
+  // Auth State
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    const saved = localStorage.getItem('agentSession');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [loginEmail, setLoginEmail] = useState('agente@hotel.com');
+  const [loginPassword, setLoginPassword] = useState('password');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Profile Modal State
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [profileAvatar, setProfileAvatar] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeView === 'chat') {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, activeConv?.mode, activeView]);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      // Play and immediately pause to unlock the audio context on first interaction
+      tickSound.play().then(() => {
+        tickSound.pause();
+        tickSound.currentTime = 0;
+      }).catch(() => {});
+      bellSound.play().then(() => {
+        bellSound.pause();
+        bellSound.currentTime = 0;
+      }).catch(() => {});
+      document.removeEventListener('click', unlockAudio);
+    };
+    document.addEventListener('click', unlockAudio);
+    return () => document.removeEventListener('click', unlockAudio);
+  }, []);
+
+  const playMessageSound = () => {
+    tickSound.currentTime = 0;
+    tickSound.play().catch((e) => console.error("Error playing tick sound:", e));
+  };
+
+  const playNewChatSound = () => {
+    bellSound.currentTime = 0;
+    bellSound.play().catch((e) => console.error("Error playing bell sound:", e));
+  };
+
+  useEffect(() => {
+    // Supabase Realtime Subscription
+    const channel = supabase.channel('chat_realtime')
+      // Generic refresh for any change
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload: any) => {
+        // If it's a new inset message and sender is NOT agent/bot
+        if (payload.eventType === 'INSERT' && payload.new.sender_type !== 'agent' && payload.new.sender_type !== 'bot') {
+          playMessageSound();
+        }
+        setRefreshTrigger(t => t + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, (payload: any) => {
+        if (payload.eventType === 'INSERT') {
+          playNewChatSound();
+        }
+        setRefreshTrigger(t => t + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ai_suggestions' }, () => setRefreshTrigger(t => t + 1))
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    if (activeConv?.id) fetchMessages(activeConv.id);
+  }, [refreshTrigger, activeConv?.id]);
+
+  const fetchData = async () => {
+    // Solicitar simultáneamente las conversaciones y los usuarios para hacer join manual
+    const [convsRes, usersRes] = await Promise.all([
+       supabase.from('conversations').select('*, contacts(*), messages(content, created_at)'),
+       supabase.from('users').select('id, name, avatar')
+    ]);
+    
+    const convs = convsRes.data;
+    const usersData = usersRes.data || [];
+      
+    if (convs && convs.length > 0) {
+      // Ordenar por last_message_at descendente
+      convs.sort((a,b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime());
+
+      const formatted = convs.map(c => {
+        // Encontrar el agente asignado
+        const assignedAgent = c.assigned_user_id ? usersData.find(u => u.id === c.assigned_user_id) : null;
+        // Obtener último mensaje del array de mensajes
+        const sortedMsgs = c.messages?.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) || [];
+        const lastMsgDesc = sortedMsgs.length > 0 ? sortedMsgs[0].content : 'Sin mensajes aún';
+
+        return {
+          id: c.id,
+          name: c.contacts?.name || '',
+          phone: c.contacts?.phone || 'Desconocido',
+          status: c.status,
+          mode: c.mode || 'HUMAN',
+          agent: assignedAgent,
+          time: c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '',
+          lastMessage: lastMsgDesc,
+          unread: 0
+        };
+      });
+      setConversations(formatted);
+      // Actualizar activeConv si ya hay uno seleccionado pero con nuevos datos
+      if (activeConv) {
+         const updated = formatted.find(f => f.id === activeConv.id);
+         if (updated) setActiveConv(updated);
+      } else {
+         setActiveConv(formatted[0]);
+      }
+    }
+  };
+
+  const sendToN8n = async (phone: string, text: string) => {
+    const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
+    if (!webhookUrl) {
+      console.warn('VITE_N8N_WEBHOOK_URL no está configurada. El mensaje no se envió a WhatsApp.');
+      return;
+    }
+    
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phone,
+          message: text
+        })
+      });
+    } catch (error) {
+      console.error('Error enviando a n8n:', error);
+    }
+  };
+
+  const handleSendSuggestion = async () => {
+    if (!activeConv || !aiSuggestion || !currentUser) return;
+    
+    // 1. Aprobar sugerencia
+    await supabase.from('ai_suggestions')
+      .update({ status: 'APPROVED' })
+      .eq('conversation_id', activeConv.id)
+      .eq('status', 'PENDING');
+      
+    // 2. Guardar mensaje ficticio (Luego se conecta a la API de WhatsApp Cloud)
+    await supabase.from('messages')
+      .insert([{
+        conversation_id: activeConv.id,
+        sender_type: 'agent',
+        sender_id: String(currentUser.id),
+        content: aiSuggestion
+      }]);
+      
+    // 3. Cambiar status del chat
+    await supabase.from('conversations')
+      .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
+      .eq('id', activeConv.id);
+
+    // 4. Enviar a n8n (WhatsApp)
+    await sendToN8n(activeConv.phone, aiSuggestion);
+
+    setAiSuggestion('');
+    setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
+    setRefreshTrigger(t => t + 1);
+  };
+
+  const handleDiscardSuggestion = async () => {
+    if (!activeConv) return;
+    
+    await supabase.from('ai_suggestions')
+      .update({ status: 'REJECTED' })
+      .eq('conversation_id', activeConv.id)
+      .eq('status', 'PENDING');
+
+    await supabase.from('conversations')
+      .update({ mode: 'HUMAN' })
+      .eq('id', activeConv.id);
+
+    setAiSuggestion('');
+    setActiveConv({ ...activeConv, mode: 'HUMAN' });
+    setRefreshTrigger(t => t + 1);
+  };
+
+  const handleTakeChat = async () => {
+    if (!activeConv || !currentUser) return;
+    await supabase.from('conversations')
+      .update({ assigned_user_id: currentUser.id, mode: 'HUMAN' })
+      .eq('id', activeConv.id);
+    setActiveConv({...activeConv, assigned_user_id: currentUser.id, mode: 'HUMAN', agent: { name: currentUser.name, avatar: currentUser.avatar }});
+    setRefreshTrigger(t => t+1);
+  };
+
+  const handleSendManualMessage = async () => {
+    if (!activeConv || !replyText.trim() || !currentUser) return;
+    
+    const content = replyText.trim();
+    setReplyText('');
+    
+    const { error: msgError } = await supabase.from('messages')
+      .insert([{
+        conversation_id: activeConv.id,
+        sender_type: 'agent',
+        sender_id: String(currentUser.id),
+        content: content
+      }]);
+      
+    if (msgError) console.error("Error insertando mensaje manual:", msgError);
+      
+    await supabase.from('conversations')
+      .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
+      .eq('id', activeConv.id);
+
+    // Enviar mensaje a n8n (WhatsApp)
+    await sendToN8n(activeConv.phone, content);
+
+    setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
+    setRefreshTrigger(t => t + 1);
+  };
+
+  const handleResetChats = async () => {
+    if (!window.confirm("🚨 Peligro: ¿Estás súper seguro de que quieres borrar TODOS los chats y volver a cero?")) return;
+    
+    // Borrar todo forzando la condición (Cascade de PostgreSQL limpiará los mensajes y sugerencias)
+    await supabase.from('conversations').delete().neq('id', 0);
+    await supabase.from('contacts').delete().neq('id', 0);
+    
+    setConversations([]);
+    setActiveConv(null);
+    setMessages([]);
+    setAiSuggestion('');
+    setRefreshTrigger(t => t+1);
+  };
+
+
+
+  const fetchMessages = async (convId: number) => {
+    const { data: msgs } = await supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true });
+    setMessages(msgs || []);
+    
+    // Suggestion Panel Check
+    const { data: suggs } = await supabase.from('ai_suggestions')
+      .select('*').eq('conversation_id', convId).eq('status', 'PENDING').order('created_at', { ascending: false }).limit(1);
+    
+    if (suggs && suggs.length > 0) {
+      setAiSuggestion(suggs[0].suggestion);
+      setActiveConv((prev: any) => ({...prev, mode: 'AI_SUGGEST'}));
+    } else {
+      setAiSuggestion('');
+      setActiveConv((prev: any) => prev?.mode === 'AI_SUGGEST' ? {...prev, mode: 'HUMAN'} : prev);
+    }
+  };
   
   // Knowledge Base State
   const [knowledgeText, setKnowledgeText] = useState('');
@@ -130,13 +397,186 @@ export default function App() {
     }
   };
 
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    setIsLoggingIn(true);
+    try {
+      // Login directo contra Supabase (tabla users)
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('id, name, email, password, avatar')
+        .eq('email', loginEmail)
+        .single();
+
+      if (error || !users) throw new Error('Usuario no encontrado');
+
+      // Verificar password hasheado con bcrypt
+      const passwordMatch = await bcrypt.compare(loginPassword, users.password);
+      if (!passwordMatch) throw new Error('Contraseña incorrecta');
+
+      const loggedUser = {
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        avatar: users.avatar || ''
+      };
+
+      setCurrentUser(loggedUser);
+      localStorage.setItem('agentSession', JSON.stringify(loggedUser));
+      setProfileName(loggedUser.name);
+      setProfileAvatar(loggedUser.avatar);
+    } catch (err: any) {
+      setLoginError(err.message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleUpdateProfile = async () => {
+     if (!currentUser) return;
+     try {
+       await supabase.from('users').update({ name: profileName, avatar: profileAvatar }).eq('id', currentUser.id);
+       const updatedUser = {...currentUser, name: profileName, avatar: profileAvatar};
+       setCurrentUser(updatedUser);
+       localStorage.setItem('agentSession', JSON.stringify(updatedUser));
+       setIsProfileModalOpen(false);
+       setRefreshTrigger(t => t+1);
+     } catch (e) {
+       console.error(e);
+     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const res = await fetch('http://localhost:8001/api/upload-avatar', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok && data.url) {
+        setProfileAvatar(data.url);
+      } else {
+        alert('Error al subir imagen: ' + (data.error || 'Server error'));
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error de red al subir imagen');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const fetchHistory = async () => {
+    const { data: contacts } = await supabase
+      .from('contacts')
+      .select('id, name, phone, conversations(id)');
+    if (contacts) {
+      const formatted = contacts
+        .map((c: any) => ({ ...c, conv_count: c.conversations?.length || 0 }))
+        .sort((a: any, b: any) => b.conv_count - a.conv_count);
+      setHistoryContacts(formatted);
+    }
+  };
+
+  const toggleContactHistory = async (contactId: number) => {
+    if (expandedContact === contactId) {
+      setExpandedContact(null);
+      return;
+    }
+    setExpandedContact(contactId);
+    if (contactConvs[contactId]) return; // already loaded
+
+    const { data: convs } = await supabase
+      .from('conversations')
+      .select('id, status, mode, last_message_at, assigned_user_id, messages(content, sender_type, created_at)')
+      .eq('contact_id', contactId)
+      .order('last_message_at', { ascending: false });
+
+    const usersRes = await supabase.from('users').select('id, name');
+    const users = usersRes.data || [];
+
+    const formatted = (convs || []).map((c: any) => {
+      const agent = c.assigned_user_id ? users.find((u: any) => u.id === c.assigned_user_id) : null;
+      const sortedMsgs = (c.messages || []).sort((a: any, b: any) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      return { ...c, messages: sortedMsgs, assigned_agent: agent?.name || null };
+    });
+
+    setContactConvs(prev => ({ ...prev, [contactId]: formatted }));
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('agentSession');
+  };
+
+  if (!currentUser) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 dark:bg-slate-900 overflow-hidden relative">
+        <div className="absolute inset-0 bg-[url('https://wallpapers.com/images/hd/whatsapp-chat-background-pf4q86mbbm6t6nvo.jpg')] bg-repeat opacity-[0.03] pointer-events-none"></div>
+        <div className="bg-white dark:bg-slate-800 p-10 rounded-[2rem] shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md z-10">
+          <div className="text-center mb-10">
+            <div className="mx-auto flex items-center justify-center mb-4">
+              <img src="/favicon.png" alt="Bot" className="w-16 h-16 object-contain drop-shadow-lg" />
+            </div>
+            <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-10 object-contain mx-auto drop-shadow-sm" />
+          </div>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Email</label>
+              <input 
+                type="email" 
+                value={loginEmail}
+                onChange={e => setLoginEmail(e.target.value)}
+                className="w-full px-5 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Contraseña</label>
+              <input 
+                type="password" 
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                className="w-full px-5 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                required
+              />
+            </div>
+            {loginError && <p className="text-rose-500 text-sm font-bold bg-rose-50 dark:bg-rose-500/10 p-3 rounded-xl border border-rose-200 dark:border-rose-500/20 text-center animate-pulse">{loginError}</p>}
+            <button 
+              type="submit" 
+              disabled={isLoggingIn}
+              className={`w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/30 transform transition-all text-lg flex items-center justify-center gap-3 ${isLoggingIn ? 'opacity-80 scale-95 cursor-not-allowed' : 'hover:-translate-y-0.5 active:scale-95'}`}
+            >
+              {isLoggingIn ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Iniciando sesión...
+                </>
+              ) : "Entrar al Panel"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-sans overflow-hidden">
       
       {/* Sidebar - Navigation */}
       <div className="w-16 flex-shrink-0 bg-gradient-to-b from-indigo-700 to-purple-800 hidden md:flex flex-col items-center py-6 shadow-xl z-20">
-        <div className="text-white bg-white/20 p-2 rounded-xl backdrop-blur-md mb-8 shadow-inner shadow-white/30">
-          <Bot size={28} />
+        <div className="bg-white/20 p-1 rounded-xl backdrop-blur-md mb-8 shadow-inner shadow-white/30" title={`Agente: ${currentUser.name}`}>
+          <img src="/favicon.png" alt="Bot Logo" className="w-8 h-8 object-cover rounded-lg" />
         </div>
         <div className="flex flex-col gap-6 flex-1 text-indigo-200">
           <button 
@@ -151,20 +591,32 @@ export default function App() {
             <BookOpen size={24} />
           </button>
 
-          <button className="p-2 hover:text-white hover:bg-white/10 rounded-xl transition"><User size={24} /></button>
+          <button 
+            onClick={() => { setActiveView('history'); fetchHistory(); }}
+            className={`p-2 rounded-xl transition ${activeView === 'history' ? 'text-white bg-white/20 shadow-inner' : 'hover:text-white hover:bg-white/10'}`}
+            title="Historial">
+            <History size={24} />
+          </button>
+
           <button className="p-2 hover:text-white hover:bg-white/10 rounded-xl transition"><Bell size={24} /></button>
         </div>
-        <button className="p-2 text-indigo-200 hover:text-white hover:bg-white/10 rounded-xl transition"><Settings size={24} /></button>
+        <div className="mt-auto flex flex-col items-center gap-4">
+          <button onClick={handleLogout} title="Cerrar sesión" className="p-2 text-indigo-300 hover:text-red-400 hover:bg-red-500/20 rounded-xl transition">
+            <Power size={24} />
+          </button>
+          <button className="p-2 text-indigo-200 hover:text-white hover:bg-white/10 rounded-xl transition"><Settings size={24} /></button>
+          <button onClick={handleResetChats} title="Resetear todo el sistema" className="p-2 text-pink-300 hover:text-white hover:bg-pink-600/50 rounded-xl transition shadow shadow-pink-500/20"><Trash2 size={24} /></button>
+        </div>
       </div>
 
       {activeView === 'chat' ? (
         <>
           {/* Conversations List */}
-          <div className="w-96 flex-shrink-0 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 shadow-lg z-10">
+          <div className={`${isMobileChatOpen ? 'hidden md:flex' : 'flex'} w-full md:w-96 flex-shrink-0 flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 shadow-lg z-10`}>
             {/* Header */}
             <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-slate-50 to-white dark:from-slate-900 dark:to-slate-950">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">Mensajes</h2>
+                <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm" />
                 <button className="md:hidden p-2"><Menu size={24} /></button>
               </div>
               <div className="relative">
@@ -179,12 +631,13 @@ export default function App() {
 
             {/* List */}
             <div className="flex-1 overflow-y-auto w-full">
-              {MOCK_CONVERSATIONS.map(conv => (
+              {conversations.length === 0 && <p className="p-5 text-sm text-slate-500 text-center">No hay conversaciones</p>}
+              {conversations.map(conv => (
                 <div 
                   key={conv.id} 
-                  onClick={() => setActiveConv(conv)}
+                  onClick={() => { setActiveConv(conv); setIsMobileChatOpen(true); }}
                   className={`p-4 border-b border-slate-50 dark:border-slate-800/50 cursor-pointer transition-all duration-300 relative group
-                    ${activeConv.id === conv.id ? 'bg-indigo-50/60 dark:bg-indigo-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
+                    ${activeConv?.id === conv.id ? 'bg-indigo-50/60 dark:bg-indigo-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
                 >
                   {activeConv.id === conv.id && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-r shadow-[0_0_8px_rgba(99,102,241,0.6)]"></div>}
                   
@@ -221,10 +674,17 @@ export default function App() {
           </div>
 
           {/* Main Chat Area */}
-          <div className="flex-1 flex flex-col relative bg-[#f0f2f5] dark:bg-[#0b141a]">
+          {activeConv ? (
+          <div className={`${isMobileChatOpen ? 'flex' : 'hidden md:flex'} flex-1 flex-col relative bg-[#f0f2f5] dark:bg-[#0b141a]`}>
             {/* Chat Header */}
-            <div className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center px-6 shadow-sm z-10 w-full relative">
-              <div className="flex items-center gap-4">
+            <div className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center px-4 md:px-6 shadow-sm z-10 w-full relative">
+              <div className="flex items-center gap-3 md:gap-4">
+                <button 
+                  className="md:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+                  onClick={() => setIsMobileChatOpen(false)}
+                >
+                  <ChevronLeft size={24} />
+                </button>
                 <UserCircle2 size={36} className="text-slate-400" />
                 <div>
                   <h2 className="text-lg font-bold flex items-center gap-2">
@@ -235,9 +695,33 @@ export default function App() {
                   </span>
                 </div>
               </div>
-              <button className="px-5 py-2.5 bg-gradient-to-r from-slate-800 to-slate-700 dark:from-slate-700 dark:to-slate-600 text-white rounded-full text-sm font-semibold hover:shadow-lg transition-all flex items-center gap-2 transform hover:scale-105 active:scale-95">
-                <User size={16} /> Tomar Chat Manual
-              </button>
+              <div className="flex items-center gap-4">
+                {activeConv.agent && (
+                   <button
+                     onClick={() => setIsProfileModalOpen(true)}
+                     title="Configurar Perfil"
+                     className="hidden md:flex items-center gap-2 bg-slate-50 dark:bg-slate-800 py-1.5 px-3 rounded-full shadow-sm border border-slate-100 dark:border-slate-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors cursor-pointer"
+                   >
+                      <div className="flex -space-x-1">
+                         {activeConv.agent.avatar ? (
+                            <img src={activeConv.agent.avatar} className="w-6 h-6 rounded-full object-cover border border-white dark:border-slate-800 shadow-sm" alt="Agent" />
+                         ) : (
+                            <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex justify-center items-center text-[10px] font-bold border border-white shadow-sm">
+                               {activeConv.agent.name.charAt(0)}
+                            </div>
+                         )}
+                      </div>
+                      <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                         {activeConv.agent.name}
+                      </span>
+                   </button>
+                )}
+                {(!activeConv.agent || activeConv.agent.id !== currentUser?.id) && (
+                  <button onClick={handleTakeChat} className="px-5 py-2.5 bg-gradient-to-r from-slate-800 to-slate-700 dark:from-slate-700 dark:to-slate-600 text-white rounded-full text-sm font-semibold hover:shadow-lg transition-all flex items-center gap-2 transform hover:scale-105 active:scale-95">
+                    <User size={16} /> Tomar Chat Manual
+                  </button>
+                )}
+              </div>
             </div>
             
             {/* Chat Background & Messages */}
@@ -250,23 +734,31 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="bg-white dark:bg-slate-800 p-3.5 rounded-2xl rounded-tl-sm w-fit max-w-[75%] shadow hover:shadow-md transition-shadow relative group">
-                <p className="text-slate-800 dark:text-slate-200 leading-snug">{activeConv.lastMessage}</p>
-                <div className="flex justify-end items-center gap-1 mt-1 text-[10px] text-slate-400">
-                  {activeConv.time}
-                </div>
-              </div>
-                 
-              {activeConv.status === 'Atendida' && (
-                <div className="flex justify-end">
-                  <div className="bg-gradient-to-br from-indigo-100 to-blue-50 dark:from-indigo-900/60 dark:to-slate-800 p-3.5 rounded-2xl rounded-tr-sm w-fit max-w-[75%] shadow-md border border-indigo-50/50 dark:border-indigo-800/30">
-                    <p className="text-slate-800 dark:text-slate-200 leading-snug">Gracias por la información</p>
-                    <div className="flex justify-end items-center gap-1 mt-1 text-[10px] text-indigo-400">
-                      {activeConv.time} <CheckCheck size={14} className="text-blue-500" />
+              {messages.length === 0 && (
+                <div className="text-center text-slate-500 mt-10 text-sm">No hay mensajes cargados para este chat.</div>
+              )}
+
+              {messages.map((msg, index) => {
+                const isBot = msg.sender_type === 'bot' || msg.sender_type === 'agent';
+                return (
+                  <div key={msg.id || index} className={`flex ${isBot ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`${isBot ? 'bg-gradient-to-br from-indigo-100 to-blue-50 dark:from-indigo-900/60 dark:to-slate-800 border-indigo-50/50' : 'bg-white dark:bg-slate-800'} p-3.5 rounded-2xl ${isBot ? 'rounded-tr-sm' : 'rounded-tl-sm'} w-fit max-w-[75%] shadow hover:shadow-md transition-shadow relative group border dark:border-slate-700/50`}>
+                      <p className="text-slate-800 dark:text-slate-200 leading-snug break-words whitespace-pre-wrap">{msg.content}</p>
+                      <div className={`flex ${isBot ? 'justify-end' : 'justify-start'} items-center gap-1 mt-1 text-[10px] ${isBot ? 'text-indigo-400' : 'text-slate-400'}`}>
+                        {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''} 
+                        {isBot && <CheckCheck size={14} className="text-blue-500" />}
+                      </div>
                     </div>
                   </div>
-                </div>
+                );
+              })}
+              
+              {/* Invisible spacer so absolute panel doesn't hide the last message */}
+              {activeConv.mode === 'AI_SUGGEST' && (
+                <div className="h-[220px] w-full flex-shrink-0"></div>
               )}
+              
+              <div ref={messagesEndRef} />
             </div>
 
             {/* AI Suggestion Premium Panel (Glassmorphism) */}
@@ -293,10 +785,10 @@ export default function App() {
                     onChange={(e) => setAiSuggestion(e.target.value)}
                   />
                   <div className="flex gap-3 mt-4">
-                    <button className="flex items-center justify-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl font-bold w-full shadow-lg shadow-indigo-500/30 transform hover:-translate-y-0.5 transition-all active:scale-95">
+                    <button onClick={handleSendSuggestion} className="flex items-center justify-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl font-bold w-full shadow-lg shadow-indigo-500/30 transform hover:-translate-y-0.5 transition-all active:scale-95">
                       <Send size={18} /> Enviar Sugerencia
                     </button>
-                    <button className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 rounded-xl font-semibold w-1/3 transition-all active:scale-95 border border-slate-200 dark:border-slate-700">
+                    <button onClick={handleDiscardSuggestion} className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 rounded-xl font-semibold w-1/3 transition-all active:scale-95 border border-slate-200 dark:border-slate-700">
                       Descartar
                     </button>
                   </div>
@@ -306,22 +798,135 @@ export default function App() {
 
             {/* Manual Reply Input Space */}
             <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex gap-3 shadow-ambient relative z-30">
-              <button className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl hover:bg-slate-200 transition-colors">
-                <Sparkles size={22} className="text-purple-500" />
+              <button 
+                title="Mensaje de Presentación"
+                onClick={() => setReplyText(`Hola Soy ${currentUser?.name || 'Agente'} del hotel Colinas, en que puedo ayudarte?`)}
+                className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl hover:bg-slate-200 transition-colors text-lg"
+              >
+                👋
               </button>
+
               <input 
                 type="text" 
                 placeholder="Escribe un mensaje al cliente..." 
                 className="flex-1 px-5 py-3 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium" 
                 value={replyText}
                 onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendManualMessage()}
               />
-              <button className="px-5 p-3 relative group w-14 rounded-2xl flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 transform transition-all active:scale-95">
+              <button 
+                onClick={handleSendManualMessage}
+                className="px-5 p-3 relative group w-14 rounded-2xl flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 transform transition-all active:scale-95">
                 <Send size={20} className="ml-1 group-hover:translate-x-1 transition-transform" />
               </button>
             </div>
           </div>
+          ) : (
+            <div className="hidden md:flex flex-1 items-center justify-center bg-[#f0f2f5] dark:bg-[#0b141a]">
+              <div className="text-center p-8 bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+                <MessageSquare size={48} className="mx-auto text-slate-300 dark:text-slate-700 mb-4" />
+                <h3 className="text-xl font-bold text-slate-700 dark:text-slate-300 mb-2">Comienza a chatear</h3>
+                <p className="text-slate-500">Selecciona una conversación de la lista lateral o espera nuevos mensajes.</p>
+              </div>
+            </div>
+          )}
         </>
+      ) : activeView === 'history' ? (
+        /* HISTORY VIEW */
+        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-8 md:p-12 relative w-full items-center">
+          <div className="w-full max-w-4xl">
+            <div className="mb-10 text-center">
+              <div className="inline-flex items-center justify-center p-4 bg-gradient-to-tr from-indigo-100 to-purple-100 dark:from-indigo-900/50 dark:to-purple-900/50 rounded-3xl mb-4 shadow-sm border border-indigo-200 dark:border-indigo-800/50">
+                <History size={40} className="text-indigo-600 dark:text-indigo-400" />
+              </div>
+              <h2 className="text-4xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 tracking-tight">
+                Historial de Conversaciones
+              </h2>
+              <p className="text-slate-500 dark:text-slate-400 mt-4 text-lg">
+                Consulta el historial de chats organizados por cliente.
+              </p>
+            </div>
+
+            {historyContacts.length === 0 ? (
+              <div className="text-center py-20 text-slate-400">
+                <MessageSquare size={48} className="mx-auto mb-4 opacity-30" />
+                <p className="text-lg font-medium">No hay historial disponible</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {historyContacts.map(contact => (
+                  <div key={contact.id} className="bg-white dark:bg-slate-900 rounded-2xl shadow border border-slate-200 dark:border-slate-800 overflow-hidden">
+                    {/* Contact Row */}
+                    <button
+                      onClick={() => toggleContactHistory(contact.id)}
+                      className="w-full flex items-center justify-between p-5 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold text-lg shadow">
+                          {contact.name ? contact.name.charAt(0).toUpperCase() : '#'}
+                        </div>
+                        <div className="text-left">
+                          <p className="font-bold text-slate-800 dark:text-slate-200">{contact.name || 'Sin nombre'}</p>
+                          <p className="text-sm text-slate-500">{contact.phone}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold px-3 py-1 rounded-full">
+                          {contact.conv_count} conversación{contact.conv_count !== 1 ? 'es' : ''}
+                        </span>
+                        {expandedContact === contact.id ? <ChevronDown size={18} className="text-slate-400" /> : <ChevronRight size={18} className="text-slate-400" />}
+                      </div>
+                    </button>
+
+                    {/* Expanded Conversations */}
+                    {expandedContact === contact.id && (
+                      <div className="border-t border-slate-100 dark:border-slate-800">
+                        {(contactConvs[contact.id] || []).length === 0 ? (
+                          <p className="text-sm text-slate-400 p-5 text-center">Cargando...</p>
+                        ) : (
+                          (contactConvs[contact.id] || []).map((conv: any) => (
+                            <div key={conv.id} className="p-5 border-b last:border-0 border-slate-50 dark:border-slate-800/50">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full 
+                                    ${conv.status === 'open' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-500'}`}>
+                                    {conv.status}
+                                  </span>
+                                  <span className="text-xs text-slate-400">
+                                    {conv.last_message_at ? new Date(conv.last_message_at).toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : ''}
+                                  </span>
+                                </div>
+                                {conv.assigned_agent && (
+                                  <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-lg">
+                                    Agente: {conv.assigned_agent}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                                {(conv.messages || []).map((msg: any, i: number) => (
+                                  <div key={i} className={`flex ${msg.sender_type === 'agent' || msg.sender_type === 'bot' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`text-xs px-3 py-2 rounded-xl max-w-[80%] ${
+                                      msg.sender_type === 'agent' || msg.sender_type === 'bot'
+                                        ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-900 dark:text-indigo-200'
+                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                    }`}>
+                                      <p>{msg.content}</p>
+                                      <span className="text-[10px] opacity-50 mt-0.5 block">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
         /* KNOWLEDGE BASE VIEW */
         <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-8 md:p-12 relative w-full items-center">
@@ -448,7 +1053,60 @@ export default function App() {
               </div>
             </div>
           )}
-          
+
+        </div>
+      )}
+
+      {/* Profile Configuration Modal */}
+      {isProfileModalOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+            onClick={() => setIsProfileModalOpen(false)}
+          ></div>
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col p-8 animate-in fade-in zoom-in-95 duration-200 z-10">
+             <h3 className="text-2xl font-extrabold text-slate-800 dark:text-slate-200 mb-6 bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">Configurar Perfil</h3>
+             <div className="space-y-5">
+                <div>
+                   <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Avatar (URL o Imagen)</label>
+                   <div className="flex items-center gap-3">
+                       <div className="relative group shrink-0">
+                           {profileAvatar ? <img src={profileAvatar} alt="preview" className="w-14 h-14 rounded-full object-cover shadow border border-slate-200" /> : <div className="w-14 h-14 rounded-full bg-slate-200 flex items-center justify-center"><User className="text-slate-400" /></div>}
+                           {isUploading && <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center"><div className="w-5 h-5 border-2 border-white/50 border-t-white rounded-full animate-spin"></div></div>}
+                       </div>
+                       <input 
+                          type="text" 
+                          placeholder="Ej: https://x.com/foto.jpg"
+                          value={profileAvatar}
+                          onChange={e => setProfileAvatar(e.target.value)}
+                          className="flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-4 focus:ring-indigo-500/20 outline-none transition-all min-w-0"
+                       />
+                       <button onClick={() => fileInputRef.current?.click()} className="shrink-0 p-3 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 dark:bg-indigo-900/50 dark:hover:bg-indigo-800/50 dark:text-indigo-300 rounded-xl transition-colors shadow-sm" title="Subir desde PC">
+                          <Upload size={20} />
+                       </button>
+                       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+                   </div>
+                </div>
+                <div>
+                   <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wide">Nombre Público</label>
+                   <input 
+                      type="text" 
+                      placeholder="Tu nombre real"
+                      value={profileName}
+                      onChange={e => setProfileName(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-4 focus:ring-indigo-500/20 outline-none transition-all"
+                   />
+                </div>
+                <div className="pt-4 flex gap-3">
+                   <button onClick={handleUpdateProfile} className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 text-white font-bold py-3 rounded-xl shadow-lg transform hover:-translate-y-0.5 active:scale-95 transition-all">
+                      Guardar Cambios
+                   </button>
+                   <button onClick={() => setIsProfileModalOpen(false)} className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold py-3 rounded-xl border border-slate-200 transition-all">
+                      Cancelar
+                   </button>
+                </div>
+             </div>
+          </div>
         </div>
       )}
     </div>
