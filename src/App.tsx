@@ -18,8 +18,10 @@ export default function App() {
   const [activeConv, setActiveConv] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
+  const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
   const [aiSuggestion, setAiSuggestion] = useState("");
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   // Auth State
   const [currentUser, setCurrentUser] = useState<any>(() => {
@@ -77,11 +79,22 @@ export default function App() {
   useEffect(() => {
     // Supabase Realtime Subscription
     const channel = supabase.channel('chat_realtime')
-      // Generic refresh for any change
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload: any) => {
-        // If it's a new inset message and sender is NOT agent/bot
-        if (payload.eventType === 'INSERT' && payload.new.sender_type !== 'agent' && payload.new.sender_type !== 'bot') {
-          playMessageSound();
+        if (payload.eventType === 'INSERT') {
+          const isIncoming = payload.new.sender_type !== 'agent' && payload.new.sender_type !== 'bot';
+          if (isIncoming) {
+            playMessageSound();
+            // Increment unread badge if the message is NOT for the currently open conversation
+            setActiveConv((currentActive: any) => {
+              if (!currentActive || currentActive.id !== payload.new.conversation_id) {
+                setUnreadCounts(prev => ({
+                  ...prev,
+                  [payload.new.conversation_id]: (prev[payload.new.conversation_id] || 0) + 1
+                }));
+              }
+              return currentActive; // don't change activeConv
+            });
+          }
         }
         setRefreshTrigger(t => t + 1);
       })
@@ -170,20 +183,39 @@ export default function App() {
   const handleSendSuggestion = async () => {
     if (!activeConv || !aiSuggestion || !currentUser) return;
     
+    const content = aiSuggestion;
+
+    // Optimistic update: show message immediately in panel
+    const optimisticMsg = {
+      id: `temp-${Date.now()}`,
+      conversation_id: activeConv.id,
+      sender_type: 'agent',
+      sender_id: String(currentUser.id),
+      content: content,
+      created_at: new Date().toISOString()
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+    setAiSuggestion('');
+    setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
+
     // 1. Aprobar sugerencia
     await supabase.from('ai_suggestions')
       .update({ status: 'APPROVED' })
       .eq('conversation_id', activeConv.id)
       .eq('status', 'PENDING');
       
-    // 2. Guardar mensaje ficticio (Luego se conecta a la API de WhatsApp Cloud)
-    await supabase.from('messages')
+    // 2. Guardar mensaje en Supabase
+    const { error: msgError } = await supabase.from('messages')
       .insert([{
         conversation_id: activeConv.id,
         sender_type: 'agent',
         sender_id: String(currentUser.id),
-        content: aiSuggestion
+        content: content
       }]);
+
+    if (msgError) {
+      console.error('Error guardando sugerencia aprobada:', msgError);
+    }
       
     // 3. Cambiar status del chat
     await supabase.from('conversations')
@@ -191,10 +223,8 @@ export default function App() {
       .eq('id', activeConv.id);
 
     // 4. Enviar a n8n (WhatsApp)
-    await sendToN8n(activeConv.phone, aiSuggestion);
+    await sendToN8n(activeConv.phone, content);
 
-    setAiSuggestion('');
-    setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
     setRefreshTrigger(t => t + 1);
   };
 
@@ -229,6 +259,17 @@ export default function App() {
     
     const content = replyText.trim();
     setReplyText('');
+
+    // Optimistic update: show message immediately in the panel
+    const optimisticMsg = {
+      id: `temp-${Date.now()}`,
+      conversation_id: activeConv.id,
+      sender_type: 'agent',
+      sender_id: String(currentUser.id),
+      content: content,
+      created_at: new Date().toISOString()
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
     
     const { error: msgError } = await supabase.from('messages')
       .insert([{
@@ -238,7 +279,10 @@ export default function App() {
         content: content
       }]);
       
-    if (msgError) console.error("Error insertando mensaje manual:", msgError);
+    if (msgError) {
+      console.error('Error guardando mensaje manual en Supabase:', msgError);
+      // Message already shown optimistically; Supabase persistence failed but UX is intact
+    }
       
     await supabase.from('conversations')
       .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
@@ -268,18 +312,35 @@ export default function App() {
 
 
   const fetchMessages = async (convId: number) => {
-    const { data: msgs } = await supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true });
-    setMessages(msgs || []);
+    const { data: msgs, error: msgsError } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', convId)
+      .order('created_at', { ascending: true });
+
+    if (msgsError) {
+      console.error('Error fetching messages:', msgsError);
+      // Don't wipe existing messages on error — keep what's already displayed
+    } else {
+      setMessages(msgs || []);
+    }
     
     // Suggestion Panel Check
-    const { data: suggs } = await supabase.from('ai_suggestions')
+    const { data: suggs, error: suggsError } = await supabase
+      .from('ai_suggestions')
       .select('*').eq('conversation_id', convId).eq('status', 'PENDING').order('created_at', { ascending: false }).limit(1);
     
+    if (suggsError) {
+      console.error('Error fetching suggestions:', suggsError);
+      return;
+    }
+
     if (suggs && suggs.length > 0) {
       setAiSuggestion(suggs[0].suggestion);
       setActiveConv((prev: any) => ({...prev, mode: 'AI_SUGGEST'}));
     } else {
       setAiSuggestion('');
+      // Only reset AI_SUGGEST mode if we're sure there are no pending suggestions
       setActiveConv((prev: any) => prev?.mode === 'AI_SUGGEST' ? {...prev, mode: 'HUMAN'} : prev);
     }
   };
@@ -303,11 +364,11 @@ export default function App() {
     setTestMessages(prev => [...prev, userMsg]);
     setTestInput('');
     
-    const tempBotMsg = { role: 'bot', content: 'Buscando en embeddings...', isLoading: true };
+    const tempBotMsg = { role: 'bot', content: '💬 Pensando...', isLoading: true };
     setTestMessages(prev => [...prev, tempBotMsg]);
 
     try {
-      // 1. Get query embedding from Voyage AI directly (Prototyping)
+      // 1. Embed user query with Voyage AI
       const voyageRes = await fetch('https://api.voyageai.com/v1/embeddings', {
         method: 'POST',
         headers: {
@@ -316,44 +377,77 @@ export default function App() {
         },
         body: JSON.stringify({ input: [userMsg.content], model: 'voyage-2' })
       });
-      
       const voyageData = await voyageRes.json();
-      if (!voyageRes.ok) throw new Error('Error con Voyage AI');
+      if (!voyageRes.ok) throw new Error('Error Voyage AI: ' + JSON.stringify(voyageData));
       
-      const queryVector = voyageData.data[0].embedding;
-      const vectorString = '[' + queryVector.join(',') + ']';
+      const vectorString = '[' + voyageData.data[0].embedding.join(',') + ']';
 
-      // 2. Perform Cosine Similarity Search in Supabase using RPC
-      const { data: closestContext, error } = await supabase
+      // 2. Retrieve top-3 knowledge chunks from Supabase
+      const { data: docs, error } = await supabase
         .rpc('match_documents', {
           query_embedding: vectorString,
-          match_threshold: 0.2,
-          match_count: 1
+          match_threshold: 0.15,
+          match_count: 3
         });
 
       if (error) throw error;
 
-      if (!closestContext || closestContext.length === 0) {
-        setTestMessages(prev => {
-          const filtered = prev.filter(m => !m.isLoading);
-          return [...filtered, { role: 'bot', content: 'No tengo información suficiente en mi base de conocimiento para responder a eso.' }];
-        });
-        return;
-      }
+      // 3. Build context block
+      const contextBlock = (docs && docs.length > 0)
+        ? docs.map((d: any, i: number) => `[Fragmento ${i + 1}]\n${d.content}`).join('\n\n')
+        : 'No hay información relevante en la base de conocimiento.';
 
-      const context = closestContext[0].content;
-      const confidence = Math.round(closestContext[0].similarity * 100);
-      const botReply = `Recuperado de la Memoria (Certeza: ${confidence}%)\n\n${context}`;
+      // 4. Generate response with Groq LLM
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+      if (!groqKey) throw new Error('Configurá VITE_GROQ_API_KEY en Vercel → Settings → Environment Variables para activar las respuestas IA.');
+
+      // Include last 6 exchanges as conversation history
+      const history = testMessages
+        .filter(m => !m.isLoading)
+        .slice(-6)
+        .map(m => ({ role: m.role === 'bot' ? 'assistant' as const : 'user' as const, content: m.content }));
+
+      const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${groqKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          temperature: 0.4,
+          max_tokens: 350,
+          messages: [
+            {
+              role: 'system',
+              content: `Eres el asistente virtual del hotel. Responde usando SOLO la información del contexto de conocimiento provisto. Si la pregunta no tiene respuesta en el contexto, dilo amablemente sin inventar. Sé conciso y profesional.
+
+=== CONOCIMIENTO DEL HOTEL ===
+${contextBlock}
+=== FIN DEL CONOCIMIENTO ===
+
+Responde en el mismo idioma que el usuario.`
+            },
+            ...history,
+            { role: 'user', content: userMsg.content }
+          ]
+        })
+      });
+
+      const groqData = await groqRes.json();
+      if (!groqRes.ok) throw new Error('Error Groq: ' + (groqData.error?.message || JSON.stringify(groqData)));
+
+      const botReply = groqData.choices[0]?.message?.content?.trim() || 'Sin respuesta.';
       
       setTestMessages(prev => {
         const filtered = prev.filter(m => !m.isLoading);
         return [...filtered, { role: 'bot', content: botReply }];
       });
 
-    } catch (e) {
+    } catch (e: any) {
       setTestMessages(prev => {
         const filtered = prev.filter(m => !m.isLoading);
-        return [...filtered, { role: 'bot', content: 'Error conectando directo a Supabase/Voyage AI.' }];
+        return [...filtered, { role: 'bot', content: `⚠️ ${e.message || 'Error desconocido'}` }];
       });
     }
   };
@@ -614,17 +708,22 @@ export default function App() {
           {/* Conversations List */}
           <div className={`${isMobileChatOpen ? 'hidden md:flex' : 'flex'} w-full md:w-96 flex-shrink-0 flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 shadow-lg z-10`}>
             {/* Header */}
-            <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-slate-50 to-white dark:from-slate-900 dark:to-slate-950">
-              <div className="flex items-center justify-between mb-4">
-                <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm" />
-                <button className="md:hidden p-2"><Menu size={24} /></button>
+            <div className="p-4 md:p-5 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-indigo-700 to-purple-800 md:from-slate-50 md:to-white md:dark:from-slate-900 md:dark:to-slate-950">
+              <div className="flex items-center justify-between mb-3 md:mb-4">
+                <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm brightness-0 invert md:brightness-100 md:invert-0" />
+                <button 
+                  className="md:hidden p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
+                  onClick={() => setIsMobileNavOpen(true)}
+                >
+                  <Menu size={24} />
+                </button>
               </div>
               <div className="relative">
-                <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                <Search className="absolute left-3 top-2.5 text-white/50 md:text-slate-400" size={18} />
                 <input 
                   type="text" 
                   placeholder="Buscar chats..." 
-                  className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-full py-2 pl-10 pr-4 focus:ring-2 focus:ring-purple-500 focus:outline-none transition-all shadow-inner"
+                  className="w-full bg-white/15 md:bg-slate-100 md:dark:bg-slate-900 border-none rounded-full py-2 pl-10 pr-4 text-white md:text-slate-800 md:dark:text-slate-200 placeholder-white/50 md:placeholder-slate-400 focus:ring-2 focus:ring-white/30 md:focus:ring-purple-500 focus:outline-none transition-all"
                 />
               </div>
             </div>
@@ -632,22 +731,37 @@ export default function App() {
             {/* List */}
             <div className="flex-1 overflow-y-auto w-full">
               {conversations.length === 0 && <p className="p-5 text-sm text-slate-500 text-center">No hay conversaciones</p>}
-              {conversations.map(conv => (
+              {conversations.map(conv => {
+                const unread = unreadCounts[conv.id] || 0;
+                const isActive = activeConv?.id === conv.id;
+                return (
                 <div 
                   key={conv.id} 
-                  onClick={() => { setActiveConv(conv); setIsMobileChatOpen(true); }}
+                  onClick={() => {
+                    setActiveConv(conv);
+                    setIsMobileChatOpen(true);
+                    // Clear unread badge on open
+                    setUnreadCounts(prev => ({ ...prev, [conv.id]: 0 }));
+                  }}
                   className={`p-4 border-b border-slate-50 dark:border-slate-800/50 cursor-pointer transition-all duration-300 relative group
-                    ${activeConv?.id === conv.id ? 'bg-indigo-50/60 dark:bg-indigo-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
+                    ${isActive ? 'bg-indigo-50/60 dark:bg-indigo-900/20' : unread > 0 ? 'bg-emerald-50/40 dark:bg-emerald-900/10' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
                 >
-                  {activeConv.id === conv.id && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-r shadow-[0_0_8px_rgba(99,102,241,0.6)]"></div>}
+                  {isActive && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-r shadow-[0_0_8px_rgba(99,102,241,0.6)]"></div>}
+                  {!isActive && unread > 0 && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-emerald-400 to-green-500 rounded-r"></div>}
                   
                   <div className="flex justify-between items-start mb-1 px-1">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-100 to-indigo-100 dark:from-slate-800 dark:to-slate-700 flex items-center justify-center text-indigo-700 dark:text-indigo-400 font-bold shadow-sm border border-white dark:border-slate-700">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold shadow-sm border border-white dark:border-slate-700 ${
+                        unread > 0 && !isActive 
+                          ? 'bg-gradient-to-tr from-emerald-400 to-green-500 text-white' 
+                          : 'bg-gradient-to-tr from-blue-100 to-indigo-100 dark:from-slate-800 dark:to-slate-700 text-indigo-700 dark:text-indigo-400'
+                      }`}>
                         {conv.name ? conv.name.charAt(0) : '#'}
                       </div>
                       <div>
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">{conv.name || conv.phone}</span>
+                        <span className={`${unread > 0 && !isActive ? 'font-extrabold text-slate-900 dark:text-white' : 'font-semibold text-slate-800 dark:text-slate-200'}`}>
+                          {conv.name || conv.phone}
+                        </span>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full 
                             ${conv.mode === 'AI_SUGGEST' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' : 
@@ -658,24 +772,27 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex flex-col items-end">
+                    <div className="flex flex-col items-end gap-1">
                       <span className="text-xs text-slate-400 font-medium">{conv.time}</span>
-                      {conv.unread > 0 && (
-                        <span className="mt-1 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-md shadow-pink-500/30">
-                          {conv.unread}
+                      {unread > 0 && (
+                        <span className="bg-gradient-to-r from-emerald-500 to-green-500 text-white text-xs font-bold min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full shadow-md shadow-green-500/40 animate-pulse">
+                          {unread}
                         </span>
                       )}
                     </div>
                   </div>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 truncate pl-14">{conv.lastMessage}</p>
+                  <p className={`text-sm truncate pl-14 ${unread > 0 && !isActive ? 'text-slate-700 dark:text-slate-300 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
+                    {conv.lastMessage}
+                  </p>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
           {/* Main Chat Area */}
           {activeConv ? (
-          <div className={`${isMobileChatOpen ? 'flex' : 'hidden md:flex'} flex-1 flex-col relative bg-[#f0f2f5] dark:bg-[#0b141a]`}>
+          <div className={`${isMobileChatOpen ? 'flex' : 'hidden md:flex'} flex-1 flex-col relative bg-[#f0f2f5] dark:bg-[#0b141a] pb-16 md:pb-0`}>
             {/* Chat Header */}
             <div className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center px-4 md:px-6 shadow-sm z-10 w-full relative">
               <div className="flex items-center gap-3 md:gap-4">
@@ -833,7 +950,7 @@ export default function App() {
         </>
       ) : activeView === 'history' ? (
         /* HISTORY VIEW */
-        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-8 md:p-12 relative w-full items-center">
+        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-4 pb-20 md:p-12 relative w-full items-center">
           <div className="w-full max-w-4xl">
             <div className="mb-10 text-center">
               <div className="inline-flex items-center justify-center p-4 bg-gradient-to-tr from-indigo-100 to-purple-100 dark:from-indigo-900/50 dark:to-purple-900/50 rounded-3xl mb-4 shadow-sm border border-indigo-200 dark:border-indigo-800/50">
@@ -929,7 +1046,7 @@ export default function App() {
         </div>
       ) : (
         /* KNOWLEDGE BASE VIEW */
-        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-8 md:p-12 relative w-full items-center">
+        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-4 pb-20 md:p-12 relative w-full items-center">
           
           <div className="w-full max-w-4xl">
             <div className="mb-10 text-center">
@@ -986,10 +1103,14 @@ export default function App() {
           {/* Test Bot Modal Overlay */}
           {isTestModalOpen && (
             <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
-              <div 
-                className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
-                onClick={() => setIsTestModalOpen(false)}
-              ></div>
+                <div 
+                  className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
+                  onClick={() => {
+                    setIsTestModalOpen(false);
+                    setTestMessages([{ role: 'bot', content: 'Soy el asistente simulado. ¡Hazme una pregunta sobre las reglas o la disponibilidad del hotel que acabas de cargar!' }]);
+                    setTestInput('');
+                  }}
+                ></div>
               <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-[600px] animate-in fade-in zoom-in-95 duration-200">
                 {/* Modal Header */}
                 <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 flex justify-between items-center text-white">
@@ -1003,7 +1124,11 @@ export default function App() {
                     </div>
                   </div>
                   <button 
-                    onClick={() => setIsTestModalOpen(false)}
+                    onClick={() => {
+                      setIsTestModalOpen(false);
+                      setTestMessages([{ role: 'bot', content: 'Soy el asistente simulado. ¡Hazme una pregunta sobre las reglas o la disponibilidad del hotel que acabas de cargar!' }]);
+                      setTestInput('');
+                    }}
                     className="p-2 hover:bg-white/20 rounded-full transition-colors"
                   >
                     <X size={20} />
@@ -1109,6 +1234,136 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ── MOBILE SLIDE-OUT NAV DRAWER ── */}
+      {isMobileNavOpen && (
+        <div className="md:hidden fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setIsMobileNavOpen(false)}
+          />
+          {/* Drawer */}
+          <div className="relative w-72 h-full bg-gradient-to-b from-indigo-700 to-purple-900 flex flex-col py-8 px-5 shadow-2xl">
+            {/* Logo */}
+            <div className="flex items-center gap-3 mb-10">
+              <div className="bg-white/20 p-1.5 rounded-xl backdrop-blur-md">
+                <img src="/favicon.png" alt="Logo" className="w-8 h-8 object-cover rounded-lg" />
+              </div>
+              <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain brightness-0 invert" />
+            </div>
+
+            {/* Nav Items */}
+            <nav className="flex flex-col gap-2 flex-1">
+              <button
+                onClick={() => { setActiveView('chat'); setIsMobileNavOpen(false); setIsMobileChatOpen(false); }}
+                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all text-left ${
+                  activeView === 'chat' ? 'bg-white/20 text-white shadow-inner' : 'text-indigo-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <MessageSquare size={22} />
+                <span className="font-semibold text-base">Chats</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveView('knowledge'); setIsMobileNavOpen(false); setIsMobileChatOpen(false); }}
+                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all text-left ${
+                  activeView === 'knowledge' ? 'bg-white/20 text-white shadow-inner' : 'text-indigo-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <BookOpen size={22} />
+                <span className="font-semibold text-base">Conocimiento IA</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveView('history'); fetchHistory(); setIsMobileNavOpen(false); setIsMobileChatOpen(false); }}
+                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all text-left ${
+                  activeView === 'history' ? 'bg-white/20 text-white shadow-inner' : 'text-indigo-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <History size={22} />
+                <span className="font-semibold text-base">Historial</span>
+              </button>
+
+              <button
+                className="flex items-center gap-4 px-4 py-3.5 rounded-2xl text-left text-indigo-200 hover:bg-white/10 hover:text-white transition-all"
+              >
+                <Bell size={22} />
+                <span className="font-semibold text-base">Notificaciones</span>
+              </button>
+            </nav>
+
+            {/* Bottom actions */}
+            <div className="border-t border-white/20 pt-6 flex flex-col gap-2">
+              <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/10 mb-2">
+                {currentUser?.avatar 
+                  ? <img src={currentUser.avatar} className="w-9 h-9 rounded-full object-cover border-2 border-white/30" alt="avatar" />
+                  : <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-bold">{currentUser?.name?.charAt(0)}</div>
+                }
+                <div>
+                  <p className="text-white font-bold text-sm leading-tight">{currentUser?.name}</p>
+                  <p className="text-indigo-300 text-xs">{currentUser?.email}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setIsMobileNavOpen(false); handleResetChats(); }}
+                className="flex items-center gap-4 px-4 py-3 rounded-2xl text-pink-300 hover:bg-pink-600/30 hover:text-white transition-all text-left"
+              >
+                <Trash2 size={20} />
+                <span className="font-semibold">Resetear Sistema</span>
+              </button>
+              <button 
+                onClick={() => { setIsMobileNavOpen(false); handleLogout(); }}
+                className="flex items-center gap-4 px-4 py-3 rounded-2xl text-red-300 hover:bg-red-600/30 hover:text-white transition-all text-left"
+              >
+                <Power size={20} />
+                <span className="font-semibold">Cerrar Sesión</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MOBILE BOTTOM TAB BAR ── */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-gradient-to-r from-indigo-700 to-purple-800 border-t border-indigo-600/50 flex items-center justify-around py-1.5 shadow-2xl">
+        <button
+          onClick={() => { setActiveView('chat'); setIsMobileChatOpen(false); }}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
+            activeView === 'chat' ? 'text-white bg-white/20' : 'text-indigo-300 hover:text-white'
+          }`}
+        >
+          <MessageSquare size={20} />
+          <span className="text-[10px] font-bold">Chats</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveView('knowledge'); setIsMobileChatOpen(false); }}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
+            activeView === 'knowledge' ? 'text-white bg-white/20' : 'text-indigo-300 hover:text-white'
+          }`}
+        >
+          <BookOpen size={20} />
+          <span className="text-[10px] font-bold">IA</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveView('history'); fetchHistory(); setIsMobileChatOpen(false); }}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
+            activeView === 'history' ? 'text-white bg-white/20' : 'text-indigo-300 hover:text-white'
+          }`}
+        >
+          <History size={20} />
+          <span className="text-[10px] font-bold">Historial</span>
+        </button>
+
+        <button
+          onClick={() => setIsMobileNavOpen(true)}
+          className="flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl text-indigo-300 hover:text-white transition-all"
+        >
+          <Menu size={20} />
+          <span className="text-[10px] font-bold">Menú</span>
+        </button>
+      </div>
     </div>
   );
 }
