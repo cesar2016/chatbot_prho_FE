@@ -596,7 +596,7 @@ Responde en el mismo idioma que el usuario.`
       
       // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
       const rawData = Array.isArray(data) ? data[0] : data;
-      const url = rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
+      const url = rawData?.data?.url || rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
       
       if (!url) {
         console.error("No se encontró URL en el payload de N8N:", data);
