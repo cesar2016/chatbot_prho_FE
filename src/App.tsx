@@ -590,12 +590,21 @@ Responde en el mismo idioma que el usuario.`
     setIsOnboardingLoading(true);
     setOnboardingQRUrl('');
     try {
-      // Llamamos a nuestro nuevo Webhook intermedio de N8N que guarda la Kapso Key en secreto
       const res = await fetch('https://primary-production-5376d.up.railway.app/webhook/onboarding-link');
       if (!res.ok) throw new Error('Error al generar Onboarding');
       const data = await res.json();
-      const url = data.setup_link?.setup_url || data.setup_url || data.url || JSON.stringify(data);
-      setOnboardingQRUrl(url);
+      
+      // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
+      const rawData = Array.isArray(data) ? data[0] : data;
+      const url = rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
+      
+      if (!url) {
+        console.error("No se encontró URL en el payload de N8N:", data);
+        alert("N8N no devolvió una URL válida de Kapso. Revisa la consola.");
+        setOnboardingQRUrl(JSON.stringify(data).substring(0, 100)); // Just a fallback to see what arrived
+      } else {
+        setOnboardingQRUrl(url);
+      }
     } catch (e) {
       console.error(e);
       alert('Hubo un error contactando a N8n/Kapso para el link.');
@@ -1426,6 +1435,24 @@ Responde en el mismo idioma que el usuario.`
                   
                   <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-indigo-100 dark:border-indigo-500/20 mb-6">
                     <QRCodeSVG value={onboardingQRUrl} size={200} level="M" />
+                  </div>
+                  
+                  <div className="flex items-center gap-2 w-full mb-6">
+                    <input 
+                      type="text" 
+                      readOnly 
+                      value={onboardingQRUrl} 
+                      className="flex-1 text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 p-3 rounded-xl border border-slate-200 dark:border-slate-700 outline-none"
+                    />
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(onboardingQRUrl);
+                        alert("¡Enlace copiado al portapapeles!");
+                      }}
+                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-colors"
+                    >
+                      Copiar
+                    </button>
                   </div>
                   
                   <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-full uppercase tracking-wider">
