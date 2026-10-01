@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
+import { QRCodeSVG } from 'qrcode.react';
 
 const tickSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
 const bellSound = new Audio('https://assets.mixkit.co/active_storage/sfx/237/237-preview.mp3');
@@ -38,6 +39,11 @@ export default function App() {
   const [profileName, setProfileName] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+
+  // Onboarding
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
+  const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
+  const [onboardingQRUrl, setOnboardingQRUrl] = useState('');
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -580,6 +586,24 @@ Responde en el mismo idioma que el usuario.`
     }
   };
 
+  const handleGenerateOnboarding = async () => {
+    setIsOnboardingLoading(true);
+    setOnboardingQRUrl('');
+    try {
+      // Llamamos a nuestro nuevo Webhook intermedio de N8N que guarda la Kapso Key en secreto
+      const res = await fetch('https://primary-production-5376d.up.railway.app/webhook/onboarding-link');
+      if (!res.ok) throw new Error('Error al generar Onboarding');
+      const data = await res.json();
+      const url = data.setup_link?.setup_url || data.setup_url || data.url || JSON.stringify(data);
+      setOnboardingQRUrl(url);
+    } catch (e) {
+      console.error(e);
+      alert('Hubo un error contactando a N8n/Kapso para el link.');
+    } finally {
+      setIsOnboardingLoading(false);
+    }
+  };
+
   const toggleContactHistory = async (contactId: number) => {
     if (expandedContact === contactId) {
       setExpandedContact(null);
@@ -698,7 +722,13 @@ Responde en el mismo idioma que el usuario.`
           <button onClick={handleLogout} title="Cerrar sesión" className="p-2 text-indigo-300 hover:text-red-400 hover:bg-red-500/20 rounded-xl transition">
             <Power size={24} />
           </button>
-          <button className="p-2 text-indigo-200 hover:text-white hover:bg-white/10 rounded-xl transition"><Settings size={24} /></button>
+          <button 
+            onClick={() => { setIsOnboardingModalOpen(true); handleGenerateOnboarding(); }} 
+            className="p-2 text-indigo-200 hover:text-indigo-400 bg-white/10 hover:bg-white/20 rounded-xl transition shadow shadow-indigo-500/20"
+            title="Conectar Nuevo Hotel (QR)"
+          >
+            <Settings size={24} />
+          </button>
           <button onClick={handleResetChats} title="Resetear todo el sistema" className="p-2 text-pink-300 hover:text-white hover:bg-pink-600/50 rounded-xl transition shadow shadow-pink-500/20"><Trash2 size={24} /></button>
         </div>
       </div>
@@ -1364,6 +1394,54 @@ Responde en el mismo idioma que el usuario.`
           <span className="text-[10px] font-bold">Menú</span>
         </button>
       </div>
+
+      {/* Onboarding QR Modal */}
+      {isOnboardingModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800/50 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900">
+              <h2 className="text-xl font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Settings size={20} className="text-indigo-600 dark:text-indigo-400" />
+                Conectar WhatsApp
+              </h2>
+              <button 
+                onClick={() => setIsOnboardingModalOpen(false)} 
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-500"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-8 flex flex-col items-center text-center">
+              {isOnboardingLoading ? (
+                <div className="py-12 flex flex-col items-center">
+                  <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                  <p className="font-bold text-slate-500">Generando QR Exclusivo...</p>
+                </div>
+              ) : onboardingQRUrl ? (
+                <>
+                  <p className="text-slate-600 dark:text-slate-400 mb-6 font-medium text-sm">
+                    Haz que el dueño del hotel escanee este código o ingresa a este link en su navegador para enlazar su número.
+                  </p>
+                  
+                  <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-indigo-100 dark:border-indigo-500/20 mb-6">
+                    <QRCodeSVG value={onboardingQRUrl} size={200} level="M" />
+                  </div>
+                  
+                  <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-full uppercase tracking-wider">
+                    Powered by Kapso Embedded Signup
+                  </p>
+                </>
+              ) : (
+                <div className="py-10 text-rose-500 font-bold">
+                  No se pudo generar el QR. Verifica tu webhook.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
