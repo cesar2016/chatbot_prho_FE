@@ -481,11 +481,10 @@ Responde en el mismo idioma que el usuario.`
       const vector = voyageData.data[0].embedding;
       const vectorString = '[' + vector.join(',') + ']';
 
-      // 2. Insert into Supabase knowledge RAG table directly
       const { error } = await supabase
         .from('knowledge_documents')
         .insert([
-          { content: knowledgeText, embedding: vectorString }
+          { content: knowledgeText, embedding: vectorString, tenant_id: currentUser?.tenant_id }
         ]);
 
       if (error) throw error;
