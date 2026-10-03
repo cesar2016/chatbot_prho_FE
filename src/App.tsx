@@ -117,15 +117,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetchData();
+    if (currentUser?.tenant_id) fetchData();
     if (activeConv?.id) fetchMessages(activeConv.id);
-  }, [refreshTrigger, activeConv?.id]);
+  }, [refreshTrigger, activeConv?.id, currentUser?.tenant_id]);
 
   const fetchData = async () => {
-    // Solicitar simultáneamente las conversaciones y los usuarios para hacer join manual
+    if (!currentUser?.tenant_id) return;
+    
+    // Solicitar simultáneamente las conversaciones y los usuarios para hacer join manual, filtrados por tenant_id
     const [convsRes, usersRes] = await Promise.all([
-       supabase.from('conversations').select('*, contacts(*), messages(content, created_at)'),
-       supabase.from('users').select('id, name, avatar')
+       supabase.from('conversations').select('*, contacts(*), messages(content, created_at)').eq('tenant_id', currentUser.tenant_id),
+       supabase.from('users').select('id, name, avatar').eq('tenant_id', currentUser.tenant_id)
     ]);
     
     const convs = convsRes.data;
@@ -178,7 +180,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: phone,
-          message: text
+          message: text,
+          phone_number_id: activeConv?.metadata?.phone_number_id || "1194837260385646" // dynamic fallback
         })
       });
     } catch (error) {
@@ -505,7 +508,7 @@ Responde en el mismo idioma que el usuario.`
       // Login directo contra Supabase (tabla users)
       const { data: users, error } = await supabase
         .from('users')
-        .select('id, name, email, password, avatar')
+        .select('id, name, email, password, avatar, tenant_id')
         .eq('email', loginEmail)
         .single();
 
@@ -519,10 +522,12 @@ Responde en el mismo idioma que el usuario.`
         id: users.id,
         name: users.name,
         email: users.email,
-        avatar: users.avatar || ''
+        avatar: users.avatar || '',
+        tenant_id: users.tenant_id
       };
 
       setCurrentUser(loggedUser);
+      localStorage.setItem('chatUser', JSON.stringify(loggedUser));
       localStorage.setItem('agentSession', JSON.stringify(loggedUser));
       setProfileName(loggedUser.name);
       setProfileAvatar(loggedUser.avatar);
