@@ -7,8 +7,8 @@ import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
 import { QRCodeSVG } from 'qrcode.react';
 
-const tickSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-const bellSound = new Audio('https://assets.mixkit.co/active_storage/sfx/237/237-preview.mp3');
+const tickSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+const bellSound = new Audio('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg');
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat');
@@ -82,6 +82,16 @@ export default function App() {
     bellSound.play().catch((e) => console.error("Error playing bell sound:", e));
   };
 
+  // Update browser tab title when there are unread messages
+  useEffect(() => {
+    const totalUnread = Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0);
+    if (totalUnread > 0) {
+      document.title = `(${totalUnread}) ¡Nuevo Mensaje!`;
+    } else {
+      document.title = 'ChatBot PrHo';
+    }
+  }, [unreadCounts]);
+
   useEffect(() => {
     // Supabase Realtime Subscription
     const channel = supabase.channel('chat_realtime')
@@ -93,7 +103,7 @@ export default function App() {
             // Increment unread badge if the message is NOT for the currently open conversation
             setActiveConv((currentActive: any) => {
               if (!currentActive || currentActive.id !== payload.new.conversation_id) {
-                setUnreadCounts(prev => ({
+                setUnreadCounts((prev: any) => ({
                   ...prev,
                   [payload.new.conversation_id]: (prev[payload.new.conversation_id] || 0) + 1
                 }));
