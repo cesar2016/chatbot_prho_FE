@@ -14,8 +14,8 @@ const AVAILABLE_SOUNDS = [
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/button_tiny.mp3', name: 'Toque Corto y Sutil' },
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/computer_error.mp3', name: 'Alerta Robótica' }
 ];
-
 const bellSound = new Audio('https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/bell_ring.mp3');
+const globalMessageAudio = new Audio();
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat');
@@ -65,9 +65,9 @@ export default function App() {
   useEffect(() => {
     const unlockAudio = () => {
       // Play and immediately pause to unlock the audio context on first interaction
-      const dummyAudio = new Audio('https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/water_droplet.mp3');
-      dummyAudio.play().then(() => {
-        dummyAudio.pause();
+      globalMessageAudio.src = 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/water_droplet.mp3';
+      globalMessageAudio.play().then(() => {
+        globalMessageAudio.pause();
       }).catch(() => {});
       bellSound.play().then(() => {
         bellSound.pause();
@@ -84,9 +84,9 @@ export default function App() {
   const playMessageSound = () => {
     // Read directly from localStorage to avoid stale React closures inside the realtime subscription
     const currentSound = localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id;
-    const sound = new Audio(currentSound);
-    sound.currentTime = 0;
-    sound.play().catch((e) => console.error("Error playing sound:", e));
+    globalMessageAudio.src = currentSound;
+    globalMessageAudio.currentTime = 0;
+    globalMessageAudio.play().catch((e) => console.error("Error playing sound:", e));
   };
 
   const playNewChatSound = () => {
@@ -115,6 +115,17 @@ export default function App() {
     };
   }, [unreadCounts]);
 
+  // Clear unreads for active conversation when tab becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && activeConv?.id) {
+         setUnreadCounts((prev: any) => ({ ...prev, [activeConv.id]: 0 }));
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [activeConv?.id]);
+
   useEffect(() => {
     // Supabase Realtime Subscription
     const channel = supabase.channel('chat_realtime')
@@ -123,9 +134,9 @@ export default function App() {
           const isIncoming = payload.new.sender_type !== 'agent' && payload.new.sender_type !== 'bot';
           if (isIncoming) {
             playMessageSound();
-            // Increment unread badge if the message is NOT for the currently open conversation
+            // Increment unread badge if the message is NOT for the currently open conversation, OR if the tab is hidden
             setActiveConv((currentActive: any) => {
-              if (!currentActive || currentActive.id !== payload.new.conversation_id) {
+              if (document.hidden || !currentActive || currentActive.id !== payload.new.conversation_id) {
                 setUnreadCounts((prev: any) => ({
                   ...prev,
                   [payload.new.conversation_id]: (prev[payload.new.conversation_id] || 0) + 1
