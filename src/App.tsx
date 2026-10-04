@@ -65,9 +65,9 @@ export default function App() {
   useEffect(() => {
     const unlockAudio = () => {
       // Play and immediately pause to unlock the audio context on first interaction
-      tickSound.play().then(() => {
-        tickSound.pause();
-        tickSound.currentTime = 0;
+      const dummyAudio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+      dummyAudio.play().then(() => {
+        dummyAudio.pause();
       }).catch(() => {});
       bellSound.play().then(() => {
         bellSound.pause();
