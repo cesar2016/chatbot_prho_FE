@@ -82,7 +82,9 @@ export default function App() {
   const [selectedSoundUrl, setSelectedSoundUrl] = useState(() => localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id);
 
   const playMessageSound = () => {
-    const sound = new Audio(selectedSoundUrl);
+    // Read directly from localStorage to avoid stale React closures inside the realtime subscription
+    const currentSound = localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id;
+    const sound = new Audio(currentSound);
     sound.currentTime = 0;
     sound.play().catch((e) => console.error("Error playing sound:", e));
   };
