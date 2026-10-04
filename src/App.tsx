@@ -7,7 +7,14 @@ import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
 import { QRCodeSVG } from 'qrcode.react';
 
-const tickSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+const AVAILABLE_SOUNDS = [
+  { id: 'https://actions.google.com/sounds/v1/alarms/beep_short.ogg', name: 'Corto Clásico' },
+  { id: 'https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg', name: 'Reloj Digital' },
+  { id: 'https://actions.google.com/sounds/v1/alarms/bugle_tune.ogg', name: 'Trompeta' },
+  { id: 'https://actions.google.com/sounds/v1/alarms/doorbell.ogg', name: 'Timbre de Puerta' },
+  { id: 'https://actions.google.com/sounds/v1/alarms/chime.ogg', name: 'Campana Chime' }
+];
+
 const bellSound = new Audio('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg');
 
 export default function App() {
@@ -72,9 +79,12 @@ export default function App() {
     return () => document.removeEventListener('click', unlockAudio);
   }, []);
 
+  const [selectedSoundUrl, setSelectedSoundUrl] = useState(() => localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id);
+
   const playMessageSound = () => {
-    tickSound.currentTime = 0;
-    tickSound.play().catch((e) => console.error("Error playing tick sound:", e));
+    const sound = new Audio(selectedSoundUrl);
+    sound.currentTime = 0;
+    sound.play().catch((e) => console.error("Error playing sound:", e));
   };
 
   const playNewChatSound = () => {
@@ -85,11 +95,22 @@ export default function App() {
   // Update browser tab title when there are unread messages
   useEffect(() => {
     const totalUnread = Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0);
+    
+    let interval: any;
     if (totalUnread > 0) {
-      document.title = `(${totalUnread}) ¡Nuevo Mensaje!`;
+      let isFlashing = false;
+      interval = setInterval(() => {
+        document.title = isFlashing ? `(${totalUnread}) ¡Nuevo Mensaje!` : 'ChatBot PrHo';
+        isFlashing = !isFlashing;
+      }, 1000);
     } else {
       document.title = 'ChatBot PrHo';
     }
+
+    return () => {
+      if (interval) clearInterval(interval);
+      if (totalUnread === 0) document.title = 'ChatBot PrHo';
+    };
   }, [unreadCounts]);
 
   useEffect(() => {
@@ -722,8 +743,13 @@ Responde en el mismo idioma que el usuario.`
         <div className="flex flex-col gap-6 flex-1 text-indigo-200">
           <button 
             onClick={() => setActiveView('chat')}
-            className={`p-2 rounded-xl transition ${activeView === 'chat' ? 'text-white bg-white/20 shadow-inner' : 'hover:text-white hover:bg-white/10'}`}>
+            className={`relative p-2 rounded-xl transition ${activeView === 'chat' ? 'text-white bg-white/20 shadow-inner' : 'hover:text-white hover:bg-white/10'}`}>
             <MessageSquare size={24} />
+            {Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0) > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-indigo-900 animate-pulse shadow-md">
+                {Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0)}
+              </span>
+            )}
           </button>
           
           <button 
@@ -746,9 +772,9 @@ Responde en el mismo idioma que el usuario.`
             <Power size={24} />
           </button>
           <button 
-            onClick={() => { setIsOnboardingModalOpen(true); handleGenerateOnboarding(); }} 
-            className="p-2 text-indigo-200 hover:text-indigo-400 bg-white/10 hover:bg-white/20 rounded-xl transition shadow shadow-indigo-500/20"
-            title="Conectar Nuevo Hotel (QR)"
+            onClick={() => setActiveView('settings')}
+            className={`p-2 rounded-xl transition shadow ${activeView === 'settings' ? 'text-white bg-white/20 shadow-indigo-500/20' : 'text-indigo-200 hover:text-white hover:bg-white/10'}`}
+            title="Configuración"
           >
             <Settings size={24} />
           </button>
@@ -1001,6 +1027,60 @@ Responde en el mismo idioma que el usuario.`
             </div>
           )}
         </>
+      ) : activeView === 'settings' ? (
+        /* SETTINGS VIEW */
+        <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-4 pb-20 md:p-12 relative w-full items-center">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl p-8 shadow-xl border border-slate-200 dark:border-slate-800">
+            <h2 className="text-3xl font-extrabold text-slate-800 dark:text-white mb-6 flex items-center gap-3">
+              <Settings className="text-indigo-600 dark:text-indigo-400" size={32} />
+              Configuración
+            </h2>
+            
+            <div className="space-y-8">
+              {/* Notificaciones */}
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                  <Bell size={20} className="text-indigo-500" />
+                  Sonido de Mensajes Nuevos
+                </h3>
+                <div className="space-y-3">
+                  {AVAILABLE_SOUNDS.map(sound => (
+                    <label key={sound.id} className="flex items-center gap-3 p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-indigo-400 transition-colors">
+                      <input 
+                        type="radio" 
+                        name="sound" 
+                        value={sound.id} 
+                        checked={selectedSoundUrl === sound.id}
+                        onChange={(e) => {
+                          setSelectedSoundUrl(e.target.value);
+                          localStorage.setItem('chatSound', e.target.value);
+                          const testSound = new Audio(e.target.value);
+                          testSound.play().catch(()=>{});
+                        }}
+                        className="w-5 h-5 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="font-medium text-slate-700 dark:text-slate-300">{sound.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Onboarding QR */}
+              <div className="p-6 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                 <div>
+                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1">WhatsApp Kapso</h3>
+                   <p className="text-sm text-indigo-700 dark:text-indigo-400">Vincular una nueva cuenta de WhatsApp Business para este Inquilino.</p>
+                 </div>
+                 <button 
+                  onClick={() => { setIsOnboardingModalOpen(true); handleGenerateOnboarding(); }} 
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition shrink-0 whitespace-nowrap"
+                 >
+                   Generar QR
+                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
       ) : activeView === 'history' ? (
         /* HISTORY VIEW */
         <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-4 pb-20 md:p-12 relative w-full items-center">
