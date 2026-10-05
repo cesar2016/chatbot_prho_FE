@@ -105,7 +105,9 @@ export default function App() {
 
   // Update browser tab title when there are unread messages
   useEffect(() => {
-    const totalUnread = Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0);
+    const totalUnread = Object.keys(unreadCounts)
+        .filter(conId => conversations.some(c => c.id == conId))
+        .reduce((acc: any, conId: any) => acc + unreadCounts[conId as keyof typeof unreadCounts], 0);
     
     let interval: any;
     if (totalUnread > 0) {
@@ -120,9 +122,9 @@ export default function App() {
 
     return () => {
       if (interval) clearInterval(interval);
-      if (totalUnread === 0) document.title = 'ChatBot PrHo';
+      document.title = 'ChatBot PrHo';
     };
-  }, [unreadCounts]);
+  }, [unreadCounts, conversations]);
 
   // Clear unreads for active conversation when tab becomes visible
   useEffect(() => {
@@ -136,9 +138,11 @@ export default function App() {
   }, [activeConv?.id]);
 
   useEffect(() => {
+    if (!currentUser?.tenant_id) return;
+
     // Supabase Realtime Subscription
-    const channel = supabase.channel('chat_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload: any) => {
+    const channel = supabase.channel(`chat_realtime_${currentUser.tenant_id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `tenant_id=eq.${currentUser.tenant_id}` }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
           const isIncoming = payload.new.sender_type !== 'agent' && payload.new.sender_type !== 'bot';
           if (isIncoming) {
@@ -157,17 +161,17 @@ export default function App() {
         }
         setRefreshTrigger(t => t + 1);
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, (payload: any) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `tenant_id=eq.${currentUser.tenant_id}` }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
           playNewChatSound();
         }
         setRefreshTrigger(t => t + 1);
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ai_suggestions' }, () => setRefreshTrigger(t => t + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ai_suggestions', filter: `tenant_id=eq.${currentUser.tenant_id}` }, () => setRefreshTrigger(t => t + 1))
       .subscribe();
 
     return () => { supabase.removeChannel(channel); }
-  }, []);
+  }, [currentUser?.tenant_id]);
 
   useEffect(() => {
     if (currentUser?.tenant_id) fetchData();
@@ -177,9 +181,14 @@ export default function App() {
   const fetchData = async () => {
     if (!currentUser?.tenant_id) return;
     
-    // Solicitar simultáneamente las conversaciones y los usuarios para hacer join manual, filtrados por tenant_id
+    let query = supabase.from('conversations').select('*, contacts(*), messages(content, created_at)').eq('tenant_id', currentUser.tenant_id);
+    
+    if (currentUser.role !== 'admin' && currentUser.role !== 'super_admin') {
+      query = query.or(`assigned_user_id.eq.${currentUser.id},assigned_user_id.is.null`);
+    }
+
     const [convsRes, usersRes] = await Promise.all([
-       supabase.from('conversations').select('*, contacts(*), messages(content, created_at)').eq('tenant_id', currentUser.tenant_id),
+       query,
        supabase.from('users').select('id, name, avatar').eq('tenant_id', currentUser.tenant_id)
     ]);
     
@@ -560,7 +569,7 @@ Responde en el mismo idioma que el usuario.`
       // Login directo contra Supabase (tabla users)
       const { data: users, error } = await supabase
         .from('users')
-        .select('id, name, email, password, avatar, tenant_id')
+        .select('id, name, email, password, avatar, tenant_id, role')
         .eq('email', loginEmail)
         .single();
 
@@ -575,7 +584,8 @@ Responde en el mismo idioma que el usuario.`
         name: users.name,
         email: users.email,
         avatar: users.avatar || '',
-        tenant_id: users.tenant_id
+        tenant_id: users.tenant_id,
+        role: users.role || 'operator'
       };
 
       setCurrentUser(loggedUser);
@@ -632,9 +642,11 @@ Responde en el mismo idioma que el usuario.`
   };
 
   const fetchHistory = async () => {
+    if (!currentUser?.tenant_id) return;
     const { data: contacts } = await supabase
       .from('contacts')
-      .select('id, name, phone, conversations(id)');
+      .select('id, name, phone, conversations(id)')
+      .eq('tenant_id', currentUser.tenant_id);
     if (contacts) {
       const formatted = contacts
         .map((c: any) => ({ ...c, conv_count: c.conversations?.length || 0 }))
@@ -754,6 +766,10 @@ Responde en el mismo idioma que el usuario.`
     );
   }
 
+  const visibleUnread = Object.keys(unreadCounts)
+    .filter(conId => conversations.some(c => c.id == conId))
+    .reduce((acc: any, conId: any) => acc + unreadCounts[conId as keyof typeof unreadCounts], 0);
+
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-sans overflow-hidden">
       
@@ -767,9 +783,9 @@ Responde en el mismo idioma que el usuario.`
             onClick={() => setActiveView('chat')}
             className={`relative p-2 rounded-xl transition ${activeView === 'chat' ? 'text-white bg-white/20 shadow-inner' : 'hover:text-white hover:bg-white/10'}`}>
             <MessageSquare size={24} />
-            {Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0) > 0 && (
+            {visibleUnread > 0 && (
               <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-indigo-900 animate-pulse shadow-md">
-                {Object.values(unreadCounts).reduce((acc: any, val: any) => acc + val, 0)}
+                {visibleUnread}
               </span>
             )}
           </button>
