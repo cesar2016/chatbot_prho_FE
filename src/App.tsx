@@ -226,6 +226,9 @@ export default function App() {
       } else {
          setActiveConv(formatted[0]);
       }
+    } else {
+      setConversations([]);
+      setActiveConv(null);
     }
   };
 
@@ -712,6 +715,11 @@ Responde en el mismo idioma que el usuario.`
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setConversations([]);
+    setUnreadCounts({});
+    setMessages([]);
+    setAiSuggestion('');
+    setActiveConv(null);
     localStorage.removeItem('agentSession');
   };
 
