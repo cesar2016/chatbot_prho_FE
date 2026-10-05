@@ -582,13 +582,20 @@ Responde en el mismo idioma que el usuario.`
       const passwordMatch = await bcrypt.compare(loginPassword, users.password);
       if (!passwordMatch) throw new Error('Contraseña incorrecta');
 
+      let tenantInfo = null;
+      if (users.tenant_id) {
+        const { data: tenData } = await supabase.from('tenants').select('*').eq('id', users.tenant_id).single();
+        tenantInfo = tenData;
+      }
+
       const loggedUser = {
         id: users.id,
         name: users.name,
         email: users.email,
         avatar: users.avatar || '',
         tenant_id: users.tenant_id,
-        role: users.role || 'operator'
+        role: users.role || 'operator',
+        tenantInfo: tenantInfo
       };
 
       setCurrentUser(loggedUser);
@@ -835,7 +842,19 @@ Responde en el mismo idioma que el usuario.`
             {/* Header */}
             <div className="p-4 md:p-5 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-indigo-700 to-purple-800 md:from-slate-50 md:to-white md:dark:from-slate-900 md:dark:to-slate-950">
               <div className="flex items-center justify-between mb-3 md:mb-4">
-                <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm brightness-0 invert md:brightness-100 md:invert-0" />
+                <div className="flex items-center gap-3">
+                  <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm brightness-0 invert md:brightness-100 md:invert-0" />
+                  {currentUser?.tenantInfo && (
+                    <div className="flex flex-col hidden sm:flex">
+                      <span className="text-[10px] uppercase font-bold text-indigo-300 md:text-indigo-500 tracking-wider leading-none">
+                        {currentUser.tenantInfo.name}
+                      </span>
+                      <span className="text-xs font-semibold text-white md:text-slate-700 leading-tight">
+                        {currentUser.tenantInfo.phone || currentUser.tenantInfo.kapso_phone_number_id || 'Sin número'}
+                      </span>
+                    </div>
+                  )}
+                </div>
                 <button 
                   className="md:hidden p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
                   onClick={() => setIsMobileNavOpen(true)}
