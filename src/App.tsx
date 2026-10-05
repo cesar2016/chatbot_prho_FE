@@ -246,7 +246,7 @@ export default function App() {
         body: JSON.stringify({
           phone: phone,
           message: text,
-          phone_number_id: activeConv?.metadata?.phone_number_id || "1194837260385646" // dynamic fallback
+          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "" // dynamic from tenant
         })
       });
     } catch (error) {
@@ -669,7 +669,8 @@ Responde en el mismo idioma que el usuario.`
     setIsOnboardingLoading(true);
     setOnboardingQRUrl('');
     try {
-      const res = await fetch('https://primary-production-5376d.up.railway.app/webhook/onboarding-link');
+      const tenantId = currentUser?.tenant_id || '';
+      const res = await fetch(`https://primary-production-5376d.up.railway.app/webhook/onboarding-link?tenant_id=${tenantId}`);
       if (!res.ok) throw new Error('Error al generar Onboarding');
       const data = await res.json();
       
