@@ -15,7 +15,7 @@ const AVAILABLE_SOUNDS = [
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/computer_error.mp3', name: 'Alerta Robótica' }
 ];
 const bellSound = new Audio('https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/bell_ring.mp3');
-const globalMessageAudio = new Audio();
+const AUDIO_PLAYERS: Record<string, HTMLAudioElement> = {};
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat');
@@ -64,11 +64,15 @@ export default function App() {
 
   useEffect(() => {
     const unlockAudio = () => {
-      // Play and immediately pause to unlock the audio context on first interaction
-      globalMessageAudio.src = 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/water_droplet.mp3';
-      globalMessageAudio.play().then(() => {
-        globalMessageAudio.pause();
-      }).catch(() => {});
+      // Play and immediately pause to unlock the audio context for ALL sounds on first interaction
+      AVAILABLE_SOUNDS.forEach(snd => {
+         if (!AUDIO_PLAYERS[snd.id]) {
+           AUDIO_PLAYERS[snd.id] = new Audio(snd.id);
+           AUDIO_PLAYERS[snd.id].play().then(() => {
+             AUDIO_PLAYERS[snd.id].pause();
+           }).catch(()=>{});
+         }
+      });
       bellSound.play().then(() => {
         bellSound.pause();
         bellSound.currentTime = 0;
@@ -82,11 +86,16 @@ export default function App() {
   const [selectedSoundUrl, setSelectedSoundUrl] = useState(() => localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id);
 
   const playMessageSound = () => {
-    // Read directly from localStorage to avoid stale React closures inside the realtime subscription
+    // Read directly from localStorage
     const currentSound = localStorage.getItem('chatSound') || AVAILABLE_SOUNDS[0].id;
-    globalMessageAudio.src = currentSound;
-    globalMessageAudio.currentTime = 0;
-    globalMessageAudio.play().catch((e) => console.error("Error playing sound:", e));
+    if (AUDIO_PLAYERS[currentSound]) {
+       AUDIO_PLAYERS[currentSound].currentTime = 0;
+       AUDIO_PLAYERS[currentSound].play().catch((e) => console.error("Error playing sound:", e));
+    } else {
+       // Fallback if somehow not unlocked
+       const fallback = new Audio(currentSound);
+       fallback.play().catch(()=>{});
+    }
   };
 
   const playNewChatSound = () => {
