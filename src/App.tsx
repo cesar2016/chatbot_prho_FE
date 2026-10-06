@@ -289,7 +289,8 @@ export default function App() {
         body: JSON.stringify({
           phone: phone,
           message: text,
-          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "" // dynamic from tenant
+          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", // dynamic from tenant
+          meta_access_token: currentUser?.tenantInfo?.meta_access_token || ""
         })
       });
     } catch (error) {
