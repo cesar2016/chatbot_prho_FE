@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
-import { QRCodeSVG } from 'qrcode.react';
+
 
 const AVAILABLE_SOUNDS = [
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/button_tiny.mp3', name: 'Toque Corto y Sutil' },
@@ -89,11 +89,6 @@ export default function App() {
   const [profileName, setProfileName] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('');
   const [isUploading, setIsUploading] = useState(false);
-
-  // Onboarding
-  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
-  const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
-  const [onboardingQRUrl, setOnboardingQRUrl] = useState('');
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -706,34 +701,6 @@ Responde en el mismo idioma que el usuario.`
         .map((c: any) => ({ ...c, conv_count: c.conversations?.length || 0 }))
         .sort((a: any, b: any) => b.conv_count - a.conv_count);
       setHistoryContacts(formatted);
-    }
-  };
-
-  const handleGenerateOnboarding = async () => {
-    setIsOnboardingLoading(true);
-    setOnboardingQRUrl('');
-    try {
-      const tenantId = currentUser?.tenant_id || '';
-      const res = await fetch(`https://primary-production-5376d.up.railway.app/webhook/onboarding-link?tenant_id=${tenantId}`);
-      if (!res.ok) throw new Error('Error al generar Onboarding');
-      const data = await res.json();
-      
-      // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
-      const rawData = Array.isArray(data) ? data[0] : data;
-      const url = rawData?.data?.url || rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
-      
-      if (!url) {
-        console.error("No se encontró URL en el payload de N8N:", data);
-        alert("N8N no devolvió una URL válida de Kapso. Revisa la consola.");
-        setOnboardingQRUrl(JSON.stringify(data).substring(0, 100)); // Just a fallback to see what arrived
-      } else {
-        setOnboardingQRUrl(url);
-      }
-    } catch (e) {
-      console.error(e);
-      alert('Hubo un error contactando a N8n/Kapso para el link.');
-    } finally {
-      setIsOnboardingLoading(false);
     }
   };
 
@@ -1626,72 +1593,6 @@ Responde en el mismo idioma que el usuario.`
           <span className="text-[10px] font-bold">Menú</span>
         </button>
       </div>
-
-      {/* Onboarding QR Modal */}
-      {isOnboardingModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
-            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800/50 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900">
-              <h2 className="text-xl font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Settings size={20} className="text-indigo-600 dark:text-indigo-400" />
-                Conectar WhatsApp
-              </h2>
-              <button 
-                onClick={() => setIsOnboardingModalOpen(false)} 
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-500"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-8 flex flex-col items-center text-center">
-              {isOnboardingLoading ? (
-                <div className="py-12 flex flex-col items-center">
-                  <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-                  <p className="font-bold text-slate-500">Generando QR Exclusivo...</p>
-                </div>
-              ) : onboardingQRUrl ? (
-                <>
-                  <p className="text-slate-600 dark:text-slate-400 mb-6 font-medium text-sm">
-                    Haz que el dueño del hotel escanee este código o ingresa a este link en su navegador para enlazar su número.
-                  </p>
-                  
-                  <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-indigo-100 dark:border-indigo-500/20 mb-6">
-                    <QRCodeSVG value={onboardingQRUrl} size={200} level="M" />
-                  </div>
-                  
-                  <div className="flex items-center gap-2 w-full mb-6">
-                    <input 
-                      type="text" 
-                      readOnly 
-                      value={onboardingQRUrl} 
-                      className="flex-1 text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 p-3 rounded-xl border border-slate-200 dark:border-slate-700 outline-none"
-                    />
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(onboardingQRUrl);
-                        alert("¡Enlace copiado al portapapeles!");
-                      }}
-                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-colors"
-                    >
-                      Copiar
-                    </button>
-                  </div>
-                  
-                  <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-full uppercase tracking-wider">
-                    Powered by Kapso Embedded Signup
-                  </p>
-                </>
-              ) : (
-                <div className="py-10 text-rose-500 font-bold">
-                  No se pudo generar el QR. Verifica tu webhook.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }
