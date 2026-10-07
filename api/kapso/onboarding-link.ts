@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // 1. Obtener el Customer ID principal del proyecto (requerido por Kapso)
     const customersResponse = await fetch('https://api.kapso.ai/platform/v1/customers', {
-      headers: { 'Authorization': `Bearer ${kapsoApiKey}` }
+      headers: { 'X-API-Key': kapsoApiKey }
     });
     const customersData = await customersResponse.json();
     const customerId = customersData?.data?.[0]?.id;
@@ -42,7 +42,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${kapsoApiKey}`,
+        'X-API-Key': kapsoApiKey,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
