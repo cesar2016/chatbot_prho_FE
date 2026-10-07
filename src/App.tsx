@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, UserCircle2, Bot, Send, User, X,
-  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight, Shield
+  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
-
+import { QRCodeSVG } from 'qrcode.react';
 
 const AVAILABLE_SOUNDS = [
+  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/water_droplet.mp3', name: 'Gota de Agua (Estilo WhatsApp)' },
+  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/glass.mp3', name: 'Cristal Fino (Moderno)' },
+  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/bell_ring.mp3', name: 'Campana de Recepción (Bell)' },
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/button_tiny.mp3', name: 'Toque Corto y Sutil' },
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/computer_error.mp3', name: 'Alerta Robótica' }
 ];
@@ -28,52 +31,6 @@ export default function App() {
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
-  // Super Admin Config
-  const [newTenantName, setNewTenantName] = useState('');
-  const [newTenantEmail, setNewTenantEmail] = useState('');
-  const [newTenantPass, setNewTenantPass] = useState('');
-  const [adminStatusMsg, setAdminStatusMsg] = useState('');
-
-  const handleCreateTenant = async () => {
-    if (!newTenantName || !newTenantEmail || !newTenantPass) {
-      setAdminStatusMsg('Por favor completa todos los campos.');
-      return;
-    }
-    setAdminStatusMsg('Creando hotel...');
-    try {
-      // 1. Crear el Tenant
-      const { data: tenantData, error: tenantError } = await supabase
-        .from('tenants')
-        .insert([{ name: newTenantName }])
-        .select()
-        .single();
-        
-      if (tenantError) throw tenantError;
-      
-      const hashedPassword = await bcrypt.hash(newTenantPass, 10);
-      
-      // 2. Crear el Usuario Agente
-      const { error: userError } = await supabase
-        .from('users')
-        .insert([{
-          name: 'Admin ' + newTenantName,
-          email: newTenantEmail,
-          password: hashedPassword,
-          role: 'operator', 
-          tenant_id: tenantData.id,
-        }]);
-        
-      if (userError) throw userError;
-      
-      setAdminStatusMsg(`¡Hotel y usuario creados con éxito! Tu nuevo hotel se llama: ${newTenantName}.`);
-      setNewTenantName('');
-      setNewTenantEmail('');
-      setNewTenantPass('');
-    } catch (err: any) {
-      setAdminStatusMsg('Error: ' + err.message);
-    }
-  };
-
   // Auth State
   const [currentUser, setCurrentUser] = useState<any>(() => {
     const saved = localStorage.getItem('agentSession');
@@ -89,6 +46,11 @@ export default function App() {
   const [profileName, setProfileName] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+
+  // Onboarding
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
+  const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
+  const [onboardingQRUrl, setOnboardingQRUrl] = useState('');
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -704,6 +666,34 @@ Responde en el mismo idioma que el usuario.`
     }
   };
 
+  const handleGenerateOnboarding = async () => {
+    setIsOnboardingLoading(true);
+    setOnboardingQRUrl('');
+    try {
+      const tenantId = currentUser?.tenant_id || '';
+      const res = await fetch(`https://primary-production-5376d.up.railway.app/webhook/onboarding-link?tenant_id=${tenantId}`);
+      if (!res.ok) throw new Error('Error al generar Onboarding');
+      const data = await res.json();
+      
+      // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
+      const rawData = Array.isArray(data) ? data[0] : data;
+      const url = rawData?.data?.url || rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
+      
+      if (!url) {
+        console.error("No se encontró URL en el payload de N8N:", data);
+        alert("N8N no devolvió una URL válida de Kapso. Revisa la consola.");
+        setOnboardingQRUrl(JSON.stringify(data).substring(0, 100)); // Just a fallback to see what arrived
+      } else {
+        setOnboardingQRUrl(url);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Hubo un error contactando a N8n/Kapso para el link.');
+    } finally {
+      setIsOnboardingLoading(false);
+    }
+  };
+
   const toggleContactHistory = async (contactId: number) => {
     if (expandedContact === contactId) {
       setExpandedContact(null);
@@ -1142,38 +1132,19 @@ Responde en el mismo idioma que el usuario.`
                 </div>
               </div>
 
-              {/* Super Admin Panel */}
-              {currentUser?.role === 'super_admin' && (
-                <div className="p-6 bg-rose-50 dark:bg-rose-900/20 rounded-2xl border border-rose-100 dark:border-rose-800/50">
-                  <h3 className="text-lg font-bold text-rose-900 dark:text-rose-200 mb-4 flex items-center gap-2">
-                    <Shield size={20} className="text-rose-500" />
-                    Alta de Nuevo Hotel (Súper Administrador)
-                  </h3>
-                   <div className="space-y-4">
-                     <div>
-                       <label className="text-sm font-semibold text-rose-800 dark:text-rose-300">Nombre del Nuevo Hotel</label>
-                       <input type="text" value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="Ej: Hotel del Mar" className="w-full mt-1 p-3 rounded-xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-rose-400 text-slate-700 dark:text-slate-200" />
-                     </div>
-                     <div>
-                       <label className="text-sm font-semibold text-rose-800 dark:text-rose-300">Correo del Único Agente Responsable</label>
-                       <input type="email" value={newTenantEmail} onChange={e => setNewTenantEmail(e.target.value)} placeholder="admin@hoteldelmar.com" className="w-full mt-1 p-3 rounded-xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-rose-400 text-slate-700 dark:text-slate-200" />
-                     </div>
-                     <div>
-                       <label className="text-sm font-semibold text-rose-800 dark:text-rose-300">Contraseña Local Inicial</label>
-                       <input type="text" value={newTenantPass} onChange={e => setNewTenantPass(e.target.value)} placeholder="123456" className="w-full mt-1 p-3 rounded-xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-rose-400 text-slate-700 dark:text-slate-200" />
-                     </div>
-                     <button onClick={handleCreateTenant} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition">
-                       Crear Hotel y Generar Accesos
-                     </button>
-                   </div>
-                   {adminStatusMsg && (
-                      <p className={`mt-4 text-sm font-bold text-center ${adminStatusMsg.includes('Error') ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                        {adminStatusMsg}
-                      </p>
-                   )}
-                </div>
-              )}
-
+              {/* Onboarding QR */}
+              <div className="p-6 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                 <div>
+                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1">WhatsApp Kapso</h3>
+                   <p className="text-sm text-indigo-700 dark:text-indigo-400">Vincular una nueva cuenta de WhatsApp Business para este Inquilino.</p>
+                 </div>
+                 <button 
+                  onClick={() => { setIsOnboardingModalOpen(true); handleGenerateOnboarding(); }} 
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition shrink-0 whitespace-nowrap"
+                 >
+                   Generar QR
+                 </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1593,6 +1564,72 @@ Responde en el mismo idioma que el usuario.`
           <span className="text-[10px] font-bold">Menú</span>
         </button>
       </div>
+
+      {/* Onboarding QR Modal */}
+      {isOnboardingModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800/50 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900">
+              <h2 className="text-xl font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Settings size={20} className="text-indigo-600 dark:text-indigo-400" />
+                Conectar WhatsApp
+              </h2>
+              <button 
+                onClick={() => setIsOnboardingModalOpen(false)} 
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-500"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-8 flex flex-col items-center text-center">
+              {isOnboardingLoading ? (
+                <div className="py-12 flex flex-col items-center">
+                  <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                  <p className="font-bold text-slate-500">Generando QR Exclusivo...</p>
+                </div>
+              ) : onboardingQRUrl ? (
+                <>
+                  <p className="text-slate-600 dark:text-slate-400 mb-6 font-medium text-sm">
+                    Haz que el dueño del hotel escanee este código o ingresa a este link en su navegador para enlazar su número.
+                  </p>
+                  
+                  <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-indigo-100 dark:border-indigo-500/20 mb-6">
+                    <QRCodeSVG value={onboardingQRUrl} size={200} level="M" />
+                  </div>
+                  
+                  <div className="flex items-center gap-2 w-full mb-6">
+                    <input 
+                      type="text" 
+                      readOnly 
+                      value={onboardingQRUrl} 
+                      className="flex-1 text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 p-3 rounded-xl border border-slate-200 dark:border-slate-700 outline-none"
+                    />
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(onboardingQRUrl);
+                        alert("¡Enlace copiado al portapapeles!");
+                      }}
+                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-colors"
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                  
+                  <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-full uppercase tracking-wider">
+                    Powered by Kapso Embedded Signup
+                  </p>
+                </>
+              ) : (
+                <div className="py-10 text-rose-500 font-bold">
+                  No se pudo generar el QR. Verifica tu webhook.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
