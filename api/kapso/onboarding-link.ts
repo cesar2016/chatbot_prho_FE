@@ -34,8 +34,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     // Payload of setup_links
     const payload = {
-      setupLink: {
-         allowedConnectionTypes: ["coexistence"]
+      setup_link: {
+         allowed_connection_types: ["coexistence"]
       }
     };
 
