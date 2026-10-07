@@ -664,23 +664,32 @@ Responde en el mismo idioma que el usuario.`
     try {
       const tenantId = currentUser?.tenant_id || '';
       const res = await fetch(`/api/kapso/onboarding-link?tenant_id=${tenantId}`);
-      if (!res.ok) throw new Error('Error al generar Onboarding');
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = {};
+      }
+
+      if (!res.ok) {
+        throw new Error(`Error ${res.status}: ${JSON.stringify(data)}`);
+      }
       
       // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
       const rawData = Array.isArray(data) ? data[0] : data;
       const url = rawData?.data?.url || rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
       
       if (!url) {
-        console.error("No se encontró URL en el payload de N8N:", data);
-        alert("N8N no devolvió una URL válida de Kapso. Revisa la consola.");
+        console.error("No se encontró URL en el payload:", data);
+        alert("La API no devolvió una URL válida de Kapso. Revisa la consola.");
         setOnboardingQRUrl(JSON.stringify(data).substring(0, 100)); // Just a fallback to see what arrived
       } else {
         setOnboardingQRUrl(url);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Hubo un error contactando a N8n/Kapso para el link.');
+      alert('Hubo un error generando el link de Kapso: ' + e.message);
     } finally {
       setIsOnboardingLoading(false);
     }
