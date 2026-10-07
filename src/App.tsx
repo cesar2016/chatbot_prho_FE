@@ -8,9 +8,6 @@ import bcrypt from 'bcryptjs';
 import { QRCodeSVG } from 'qrcode.react';
 
 const AVAILABLE_SOUNDS = [
-  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/water_droplet.mp3', name: 'Gota de Agua (Estilo WhatsApp)' },
-  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/glass.mp3', name: 'Cristal Fino (Moderno)' },
-  { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/bell_ring.mp3', name: 'Campana de Recepción (Bell)' },
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/button_tiny.mp3', name: 'Toque Corto y Sutil' },
   { id: 'https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.1/sounds/computer_error.mp3', name: 'Alerta Robótica' }
 ];
