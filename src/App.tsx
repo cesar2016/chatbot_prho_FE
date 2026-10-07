@@ -230,21 +230,25 @@ export default function App() {
   };
 
   const sendToN8n = async (phone: string, text: string) => {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+    const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
+    if (!webhookUrl) {
+      console.warn('VITE_N8N_WEBHOOK_URL no está configurada. El mensaje no se envió a WhatsApp.');
+      return;
+    }
     
     try {
-      await fetch(`${backendUrl}/api/kapso/send`, {
+      await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: phone,
           message: text,
-          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", 
-          conversation_id: activeConv?.id || ""
+          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", // dynamic from tenant
+          meta_access_token: currentUser?.tenantInfo?.meta_access_token || ""
         })
       });
     } catch (error) {
-      console.error('Error enviando al backend:', error);
+      console.error('Error enviando a n8n:', error);
     }
   };
 
@@ -664,8 +668,7 @@ Responde en el mismo idioma que el usuario.`
     setOnboardingQRUrl('');
     try {
       const tenantId = currentUser?.tenant_id || '';
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
-      const res = await fetch(`${backendUrl}/api/kapso/onboarding-link?tenant_id=${tenantId}`);
+      const res = await fetch(`https://primary-production-5376d.up.railway.app/webhook/onboarding-link?tenant_id=${tenantId}`);
       if (!res.ok) throw new Error('Error al generar Onboarding');
       const data = await res.json();
       
