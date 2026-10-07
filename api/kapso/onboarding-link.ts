@@ -18,12 +18,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // LLamada a la API de Kapso para inicializar un celular en modo coexistencia (Dispositivo Vinculado)
-    const url = 'https://api.kapso.ai/v1/whatsapp/numbers/new';
+    // 1. Obtener el Customer ID principal del proyecto (requerido por Kapso)
+    const customersResponse = await fetch('https://api.kapso.ai/platform/v1/customers', {
+      headers: { 'Authorization': `Bearer ${kapsoApiKey}` }
+    });
+    const customersData = await customersResponse.json();
+    const customerId = customersData?.data?.[0]?.id;
+
+    if (!customerId) {
+        return res.status(500).json({ error: 'No se encontró un Customer_ID válido en tu cuenta Kapso.' });
+    }
+
+    // 2. LLamada a la API de Kapso para inicializar un celular en modo coexistencia (Dispositivo Vinculado)
+    const url = `https://api.kapso.ai/platform/v1/customers/${customerId}/setup_links`;
     
-    // According to Kapso CLI payload documentation and standards
+    // Payload of setup_links
     const payload = {
-      connection_type: ["coexistence"]
+      setupLink: {
+         allowedConnectionTypes: ["coexistence"]
+      }
     };
 
     const response = await fetch(url, {
