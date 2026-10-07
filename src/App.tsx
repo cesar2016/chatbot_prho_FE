@@ -230,25 +230,20 @@ export default function App() {
   };
 
   const sendToN8n = async (phone: string, text: string) => {
-    const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
-    if (!webhookUrl) {
-      console.warn('VITE_N8N_WEBHOOK_URL no está configurada. El mensaje no se envió a WhatsApp.');
-      return;
-    }
-    
+    // Ya no usamos N8N webhook. Usamos la API de Vercel Serverless integradamente.
     try {
-      await fetch(webhookUrl, {
+      await fetch('/api/kapso/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: phone,
           message: text,
-          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", // dynamic from tenant
-          meta_access_token: currentUser?.tenantInfo?.meta_access_token || ""
+          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", 
+          conversation_id: activeConv?.id || ""
         })
       });
     } catch (error) {
-      console.error('Error enviando a n8n:', error);
+      console.error('Error enviando a Vercel Kapso API:', error);
     }
   };
 
@@ -668,7 +663,7 @@ Responde en el mismo idioma que el usuario.`
     setOnboardingQRUrl('');
     try {
       const tenantId = currentUser?.tenant_id || '';
-      const res = await fetch(`https://primary-production-5376d.up.railway.app/webhook/onboarding-link?tenant_id=${tenantId}`);
+      const res = await fetch(`/api/kapso/onboarding-link?tenant_id=${tenantId}`);
       if (!res.ok) throw new Error('Error al generar Onboarding');
       const data = await res.json();
       
