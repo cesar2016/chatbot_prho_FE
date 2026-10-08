@@ -1,0 +1,263 @@
+HTTP 1501554: createConnection app.kapso.ai:443:::::::::::::::::::::
+HTTPS 1501554: createConnection [Object: null prototype] {
+  maxRedirects: 21,
+  maxBodyLength: Infinity,
+  protocol: 'https:',
+  path: null,
+  method: 'GET',
+  headers: [Object: null prototype] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'X-CLI-Token': 'a51b2d420120913d130ffdbbee5f74136b38e12ecba976ef8f4c6191ec6c7218',
+    'User-Agent': 'axios/1.20.0',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  agents: { http: undefined, https: undefined },
+  auth: undefined,
+  family: undefined,
+  beforeRedirect: [Function: dispatchBeforeRedirect],
+  beforeRedirects: [Object: null prototype] { proxy: [Function: beforeRedirect] },
+  http2Options: undefined,
+  createConnection: undefined,
+  hostname: 'app.kapso.ai',
+  port: 443,
+  agent: undefined,
+  sensitiveHeaders: [],
+  insecureHTTPParser: false,
+  nativeProtocols: {
+    'http:': {
+      _connectionListener: [Function: connectionListener],
+      METHODS: [Array],
+      STATUS_CODES: [Object],
+      Agent: [Function],
+      ClientRequest: [Function: ClientRequest],
+      IncomingMessage: [Function: IncomingMessage],
+      OutgoingMessage: [Function: OutgoingMessage],
+      Server: [Function: Server],
+      ServerResponse: [Function: ServerResponse],
+      createServer: [Function: createServer],
+      validateHeaderName: [Function],
+      validateHeaderValue: [Function],
+      get: [Function: get],
+      request: [Function: request],
+      setMaxIdleHTTPParsers: [Function: setMaxIdleHTTPParsers],
+      setGlobalProxyFromEnv: [Function: setGlobalProxyFromEnv],
+      maxHeaderSize: [Getter],
+      globalAgent: [Getter/Setter],
+      WebSocket: [Getter],
+      CloseEvent: [Getter],
+      MessageEvent: [Getter]
+    },
+    'https:': {
+      Agent: [Function: Agent],
+      globalAgent: [Agent],
+      Server: [Function: Server],
+      createServer: [Function: createServer],
+      get: [Function: get],
+      request: [Function: request]
+    }
+  },
+  pathname: '/api/cli/auth/verify',
+  _defaultAgent: Agent {
+    _events: [Object: null prototype] {
+      free: [Function (anonymous)],
+      newListener: [Function: maybeEnableKeylog]
+    },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    options: [Object: null prototype] {
+      keepAlive: true,
+      scheduling: 'lifo',
+      timeout: 5000,
+      proxyEnv: undefined,
+      defaultPort: 443,
+      protocol: 'https:',
+      noDelay: true,
+      path: null
+    },
+    defaultPort: 443,
+    protocol: 'https:',
+    requests: [Object: null prototype] {},
+    sockets: [Object: null prototype] {
+      'app.kapso.ai:443:::::::::::::::::::::': []
+    },
+    freeSockets: [Object: null prototype] {},
+    keepAliveMsecs: 1000,
+    keepAlive: true,
+    maxSockets: Infinity,
+    maxFreeSockets: 256,
+    scheduling: 'lifo',
+    maxTotalSockets: Infinity,
+    totalSocketCount: 0,
+    agentKeepAliveTimeoutBuffer: 1000,
+    maxCachedSessions: 100,
+    _sessionCache: { map: {}, list: [] },
+    Symbol(shapeMode): false,
+    Symbol(kCapture): false
+  },
+  host: 'app.kapso.ai',
+  keepAlive: true,
+  scheduling: 'lifo',
+  timeout: 5000,
+  proxyEnv: undefined,
+  defaultPort: 443,
+  noDelay: true,
+  servername: 'app.kapso.ai',
+  _agentKey: 'app.kapso.ai:443:::::::::::::::::::::',
+  encoding: null,
+  keepAliveInitialDelay: 1000
+}
+HTTPS 1501554: https createConnection should use proxy for app.kapso.ai:443: null
+HTTP 1501554: sockets app.kapso.ai:443::::::::::::::::::::: 1 1
+HTTP 1501554: outgoing message end.
+(node:1501554) Warning: Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data (such as passwords, tokens and authentication headers) in the resulting log.
+(Use `node --trace-warnings ...` to show where the warning was created)
+HTTP 1501554: AGENT incoming response!
+HTTP 1501554: AGENT socket keep-alive
+HTTP 1501554: CLIENT socket onFree
+HTTP 1501554: agent.on(free) app.kapso.ai:443:::::::::::::::::::::
+HTTP 1501554: removeSocket app.kapso.ai:443::::::::::::::::::::: writable: true
+HTTP 1501554: createConnection api.kapso.ai:443:::::::::::::::::::::
+HTTPS 1501554: createConnection [Object: null prototype] {
+  maxRedirects: 21,
+  maxBodyLength: Infinity,
+  protocol: 'https:',
+  path: null,
+  method: 'GET',
+  headers: [Object: null prototype] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'X-API-Key': '4cd8e0b3a9aa2e4bea93c0a7a63f9a685c612d037a1c40f30dd48ba7cf0a2cd6',
+    'User-Agent': 'axios/1.20.0',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  agents: { http: undefined, https: undefined },
+  auth: undefined,
+  family: undefined,
+  beforeRedirect: [Function: dispatchBeforeRedirect],
+  beforeRedirects: [Object: null prototype] { proxy: [Function: beforeRedirect] },
+  http2Options: undefined,
+  createConnection: undefined,
+  hostname: 'api.kapso.ai',
+  port: 443,
+  agent: undefined,
+  sensitiveHeaders: [],
+  insecureHTTPParser: false,
+  nativeProtocols: {
+    'http:': {
+      _connectionListener: [Function: connectionListener],
+      METHODS: [Array],
+      STATUS_CODES: [Object],
+      Agent: [Function],
+      ClientRequest: [Function: ClientRequest],
+      IncomingMessage: [Function: IncomingMessage],
+      OutgoingMessage: [Function: OutgoingMessage],
+      Server: [Function: Server],
+      ServerResponse: [Function: ServerResponse],
+      createServer: [Function: createServer],
+      validateHeaderName: [Function],
+      validateHeaderValue: [Function],
+      get: [Function: get],
+      request: [Function: request],
+      setMaxIdleHTTPParsers: [Function: setMaxIdleHTTPParsers],
+      setGlobalProxyFromEnv: [Function: setGlobalProxyFromEnv],
+      maxHeaderSize: [Getter],
+      globalAgent: [Getter/Setter],
+      WebSocket: [Getter],
+      CloseEvent: [Getter],
+      MessageEvent: [Getter]
+    },
+    'https:': {
+      Agent: [Function: Agent],
+      globalAgent: [Agent],
+      Server: [Function: Server],
+      createServer: [Function: createServer],
+      get: [Function: get],
+      request: [Function: request]
+    }
+  },
+  pathname: '/platform/v1/customers',
+  search: '?per_page=100',
+  _defaultAgent: Agent {
+    _events: [Object: null prototype] {
+      free: [Function (anonymous)],
+      newListener: [Function: maybeEnableKeylog]
+    },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    options: [Object: null prototype] {
+      keepAlive: true,
+      scheduling: 'lifo',
+      timeout: 5000,
+      proxyEnv: undefined,
+      defaultPort: 443,
+      protocol: 'https:',
+      noDelay: true,
+      path: null
+    },
+    defaultPort: 443,
+    protocol: 'https:',
+    requests: [Object: null prototype] {},
+    sockets: [Object: null prototype] {
+      'api.kapso.ai:443:::::::::::::::::::::': []
+    },
+    freeSockets: [Object: null prototype] {
+      'app.kapso.ai:443:::::::::::::::::::::': [Array]
+    },
+    keepAliveMsecs: 1000,
+    keepAlive: true,
+    maxSockets: Infinity,
+    maxFreeSockets: 256,
+    scheduling: 'lifo',
+    maxTotalSockets: Infinity,
+    totalSocketCount: 1,
+    agentKeepAliveTimeoutBuffer: 1000,
+    maxCachedSessions: 100,
+    _sessionCache: { map: [Object], list: [Array] },
+    Symbol(shapeMode): false,
+    Symbol(kCapture): false
+  },
+  host: 'api.kapso.ai',
+  keepAlive: true,
+  scheduling: 'lifo',
+  timeout: 5000,
+  proxyEnv: undefined,
+  defaultPort: 443,
+  noDelay: true,
+  servername: 'api.kapso.ai',
+  _agentKey: 'api.kapso.ai:443:::::::::::::::::::::',
+  encoding: null,
+  keepAliveInitialDelay: 1000
+}
+HTTPS 1501554: https createConnection should use proxy for api.kapso.ai:443: null
+HTTP 1501554: sockets api.kapso.ai:443::::::::::::::::::::: 1 2
+HTTP 1501554: outgoing message end.
+HTTP 1501554: AGENT incoming response!
+HTTP 1501554: AGENT socket keep-alive
+HTTP 1501554: CLIENT socket onFree
+HTTP 1501554: agent.on(free) api.kapso.ai:443:::::::::::::::::::::
+HTTP 1501554: removeSocket api.kapso.ai:443::::::::::::::::::::: writable: true
+HTTP 1501554: have free socket
+HTTP 1501554: write ret = true
+HTTP 1501554: outgoing message end.
+HTTP 1501554: AGENT incoming response!
+HTTP 1501554: AGENT socket keep-alive
+HTTP 1501554: CLIENT socket onFree
+HTTP 1501554: agent.on(free) api.kapso.ai:443:::::::::::::::::::::
+HTTP 1501554: removeSocket api.kapso.ai:443::::::::::::::::::::: writable: true
+WhatsApp setup started.
+
+Open this URL to connect or provision a WhatsApp number:
+https://app.kapso.ai/whatsapp/setup/h1nVkL8EQlk6zReDNqexNIxkFVl0-4VaWqOvD2i112E
+
+Next:
+  kapso whatsapp numbers list
+  kapso status
+HTTP 1501554: have free socket
+HTTP 1501554: write ret = true
+HTTP 1501554: outgoing message end.
+HTTP 1501554: AGENT incoming response!
+HTTP 1501554: AGENT socket keep-alive
+HTTP 1501554: CLIENT socket onFree
+HTTP 1501554: agent.on(free) app.kapso.ai:443:::::::::::::::::::::
+HTTP 1501554: removeSocket app.kapso.ai:443::::::::::::::::::::: writable: true
