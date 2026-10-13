@@ -46,21 +46,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 2. Ensure tenant record has this instanceName registered
     if (tenant_id) {
       await supabaseAdmin.from('tenants').update({ kapso_phone_number_id: instanceName }).eq('id', tenant_id);
-    }
-
-    // 3. Save outbound message to Supabase
-    const { error: dbError } = await supabaseAdmin.rpc('save_whatsapp_message', {
-      p_phone: cleanPhone,
-      p_name: 'Asistente PrHo',
-      p_text: message,
-      p_is_bot: true,
-      p_phone_number_id: instanceName
-    });
-
-    if (dbError) {
-      console.error('Error guardando mensaje saliente en Supabase:', dbError);
-    }
-
     return res.status(200).json({ status: 'success', data });
 
   } catch (error: any) {

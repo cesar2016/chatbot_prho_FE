@@ -291,7 +291,8 @@ export default function App() {
         conversation_id: activeConv.id,
         sender_type: 'agent',
         sender_id: String(currentUser.id),
-        content: content
+        content: content,
+        tenant_id: currentUser.tenant_id
       }]);
 
     if (msgError) {
@@ -357,7 +358,8 @@ export default function App() {
         conversation_id: activeConv.id,
         sender_type: 'agent',
         sender_id: String(currentUser.id),
-        content: content
+        content: content,
+        tenant_id: currentUser.tenant_id
       }]);
       
     if (msgError) {

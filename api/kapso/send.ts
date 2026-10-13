@@ -46,19 +46,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const data = await response.json();
 
-    // Insertar el mensaje enviado por el bot/humano en la base de datos de Supabase
-    const { error: dbError } = await supabaseAdmin.rpc('save_whatsapp_message', {
-      p_phone: phone,
-      p_name: 'Asistente PrHo',
-      p_text: message,
-      p_is_bot: true,
-      p_phone_number_id: phone_number_id
-    });
-
-    if (dbError) {
-       console.error('❌ Error guardando mensaje en Supabase:', dbError);
-    }
-
     return res.status(200).json({ status: 'success', data });
 
   } catch (error: any) {
