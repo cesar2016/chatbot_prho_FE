@@ -1,10 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabaseAdmin } from '../_lib/supabase.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   const tenantId = req.query.tenant_id as string;
   if (!tenantId) {
@@ -32,10 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 2. LLamada a la API de Kapso para inicializar un celular en modo coexistencia (Dispositivo Vinculado)
     const url = `https://api.kapso.ai/platform/v1/customers/${customerId}/setup_links`;
     
-    // Payload of setup_links
     const payload = {
       setup_link: {
-         allowed_connection_types: ["coexistence"],
          provision_phone_number: false
       }
     };

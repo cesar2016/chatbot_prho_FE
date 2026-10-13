@@ -44,10 +44,12 @@ export default function App() {
   const [profileAvatar, setProfileAvatar] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
-  // Onboarding
+  // Onboarding (Evolution API)
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
   const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
   const [onboardingQRUrl, setOnboardingQRUrl] = useState('');
+  const [onboardingQRBase64, setOnboardingQRBase64] = useState('');
+  const [onboardingStatus, setOnboardingStatus] = useState<string>('');
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -230,20 +232,32 @@ export default function App() {
   };
 
   const sendToN8n = async (phone: string, text: string) => {
-    // Ya no usamos N8N webhook. Usamos la API de Vercel Serverless integradamente.
     try {
-      await fetch('/api/kapso/send', {
+      const res = await fetch('/api/evolution/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: phone,
           message: text,
-          phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", 
-          conversation_id: activeConv?.id || ""
+          tenant_id: currentUser?.tenant_id || 'default'
         })
       });
+
+      if (!res.ok) {
+        console.warn('No se pudo enviar por Evolution API, intentando fallback Kapso...');
+        await fetch('/api/kapso/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: phone,
+            message: text,
+            phone_number_id: currentUser?.tenantInfo?.kapso_phone_number_id || activeConv?.metadata?.phone_number_id || "", 
+            conversation_id: activeConv?.id || ""
+          })
+        });
+      }
     } catch (error) {
-      console.error('Error enviando a Vercel Kapso API:', error);
+      console.error('Error enviando mensaje WhatsApp:', error);
     }
   };
 
@@ -658,38 +672,33 @@ Responde en el mismo idioma que el usuario.`
     }
   };
 
-  const handleGenerateOnboarding = async () => {
+
+  const handleGenerateEvolutionOnboarding = async () => {
     setIsOnboardingLoading(true);
     setOnboardingQRUrl('');
+    setOnboardingQRBase64('');
+    setOnboardingStatus('connecting');
     try {
-      const tenantId = currentUser?.tenant_id || '';
-      const res = await fetch(`/api/kapso/onboarding-link?tenant_id=${tenantId}`);
-      
-      let data;
-      try {
-        data = await res.json();
-      } catch (e) {
-        data = {};
-      }
+      const tenantId = currentUser?.tenant_id || 'default';
+      const res = await fetch(`/api/evolution/qr?tenant_id=${tenantId}&t=${Date.now()}`, { cache: 'no-store' });
+      const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(`Error ${res.status}: ${JSON.stringify(data)}`);
+        throw new Error(data?.error || `Error ${res.status}: Falló la conexión con Evolution API`);
       }
-      
-      // N8N a veces envuelve la respuesta en arrays o en ".data" / ".body"
-      const rawData = Array.isArray(data) ? data[0] : data;
-      const url = rawData?.data?.url || rawData?.data?.setup_url || rawData?.body?.data?.setup_url || rawData?.setup_url || rawData?.url;
-      
-      if (!url) {
-        console.error("No se encontró URL en el payload:", data);
-        alert("La API no devolvió una URL válida de Kapso. Revisa la consola.");
-        setOnboardingQRUrl(JSON.stringify(data).substring(0, 100)); // Just a fallback to see what arrived
-      } else {
-        setOnboardingQRUrl(url);
+
+      if (data.base64) {
+        setOnboardingQRBase64(data.base64);
+      }
+      if (data.code) {
+        setOnboardingQRUrl(data.code);
+      }
+      if (data.status === 'open' || data.status === 'connected') {
+        setOnboardingStatus('connected');
       }
     } catch (e: any) {
-      console.error(e);
-      alert('Hubo un error generando el link de Kapso: ' + e.message);
+      console.error('Error generando QR de Evolution:', e);
+      alert('Hubo un error conectando con Evolution API: ' + e.message);
     } finally {
       setIsOnboardingLoading(false);
     }
@@ -1134,13 +1143,13 @@ Responde en el mismo idioma que el usuario.`
               </div>
 
               {/* Onboarding QR */}
-              <div className="p-6 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-indigo-50 dark:bg-indigo-900/10 p-5 rounded-2xl border border-indigo-100 dark:border-indigo-500/20">
                  <div>
-                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1">WhatsApp Kapso</h3>
-                   <p className="text-sm text-indigo-700 dark:text-indigo-400">Vincular una nueva cuenta de WhatsApp Business para este Inquilino.</p>
+                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1">WhatsApp Evolution API</h3>
+                   <p className="text-sm text-indigo-700 dark:text-indigo-400">Vincular una nueva cuenta de WhatsApp mediante código QR extraoficial.</p>
                  </div>
                  <button 
-                  onClick={() => { setIsOnboardingModalOpen(true); handleGenerateOnboarding(); }} 
+                  onClick={() => { setIsOnboardingModalOpen(true); handleGenerateEvolutionOnboarding(); }} 
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition shrink-0 whitespace-nowrap"
                  >
                    Generar QR
@@ -1570,10 +1579,10 @@ Responde en el mismo idioma que el usuario.`
       {isOnboardingModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
-            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800/50 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900">
+            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800/50 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-slate-900 dark:to-slate-900">
               <h2 className="text-xl font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Settings size={20} className="text-indigo-600 dark:text-indigo-400" />
-                Conectar WhatsApp
+                <Settings size={20} className="text-emerald-600 dark:text-emerald-400" />
+                Vincular WhatsApp (Evolution API)
               </h2>
               <button 
                 onClick={() => setIsOnboardingModalOpen(false)} 
@@ -1586,44 +1595,68 @@ Responde en el mismo idioma que el usuario.`
             <div className="p-8 flex flex-col items-center text-center">
               {isOnboardingLoading ? (
                 <div className="py-12 flex flex-col items-center">
-                  <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-                  <p className="font-bold text-slate-500">Generando QR Exclusivo...</p>
+                  <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-600 rounded-full animate-spin mb-4"></div>
+                  <p className="font-bold text-slate-600 dark:text-slate-300">Generando QR de vinculación...</p>
+                  <p className="text-xs text-slate-400 mt-1">Conectando con Evolution API...</p>
                 </div>
-              ) : onboardingQRUrl ? (
+              ) : onboardingStatus === 'connected' ? (
+                <div className="py-8 flex flex-col items-center">
+                  <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-4 text-2xl font-bold">
+                    ✓
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-2">¡WhatsApp Conectado!</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Tu número de WhatsApp ya se encuentra vinculado activamente y listo para responder mensajes.
+                  </p>
+                </div>
+              ) : (onboardingQRBase64 || onboardingQRUrl) ? (
                 <>
-                  <p className="text-slate-600 dark:text-slate-400 mb-6 font-medium text-sm">
-                    Haz que el dueño del hotel escanee este código o ingresa a este link en su navegador para enlazar su número.
+                  <p className="text-slate-600 dark:text-slate-400 mb-4 font-medium text-xs leading-relaxed text-left bg-emerald-50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-800/30 w-full">
+                    <span className="font-bold block mb-1 text-emerald-700 dark:text-emerald-400">Instrucciones de vinculación:</span>
+                    1. Abre <strong>WhatsApp</strong> en tu teléfono.<br />
+                    2. Ve a <strong>Ajustes / Configuración</strong> &gt; <strong>Dispositivos vinculados</strong>.<br />
+                    3. Toca <strong>Vincular un dispositivo</strong> y escanea este código.
                   </p>
                   
-                  <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-indigo-100 dark:border-indigo-500/20 mb-6">
-                    <QRCodeSVG value={onboardingQRUrl} size={200} level="M" />
+                  <div className="bg-white p-4 rounded-3xl shadow-lg border-2 border-emerald-100 dark:border-emerald-500/20 mb-4 flex items-center justify-center">
+                    {onboardingQRBase64 ? (
+                      <img 
+                        src={onboardingQRBase64.startsWith('data:') ? onboardingQRBase64 : `data:image/png;base64,${onboardingQRBase64}`} 
+                        alt="Código QR WhatsApp" 
+                        className="w-56 h-56 object-contain"
+                      />
+                    ) : (
+                      <QRCodeSVG value={onboardingQRUrl} size={220} level="M" />
+                    )}
                   </div>
-                  
-                  <div className="flex items-center gap-2 w-full mb-6">
-                    <input 
-                      type="text" 
-                      readOnly 
-                      value={onboardingQRUrl} 
-                      className="flex-1 text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 p-3 rounded-xl border border-slate-200 dark:border-slate-700 outline-none"
-                    />
+
+                  <div className="flex gap-2 w-full mb-3">
                     <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(onboardingQRUrl);
-                        alert("¡Enlace copiado al portapapeles!");
-                      }}
-                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-colors"
+                      onClick={handleGenerateEvolutionOnboarding}
+                      className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow transition-colors flex items-center justify-center gap-2"
                     >
-                      Copiar
+                      Actualizar Código QR
                     </button>
                   </div>
                   
-                  <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-full uppercase tracking-wider">
-                    Powered by Kapso Embedded Signup
+                  <p className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-4 py-1.5 rounded-full uppercase tracking-wider">
+                    Conexión directa vía Evolution API
                   </p>
                 </>
               ) : (
-                <div className="py-10 text-rose-500 font-bold">
-                  No se pudo generar el QR. Verifica tu webhook.
+                <div className="py-8 flex flex-col items-center">
+                  <div className="w-12 h-12 bg-rose-100 dark:bg-rose-900/30 text-rose-600 rounded-full flex items-center justify-center mb-3 font-bold text-xl">
+                    !
+                  </div>
+                  <p className="text-sm font-bold text-rose-600 dark:text-rose-400 mb-4">
+                    No se pudo cargar el código QR en este momento.
+                  </p>
+                  <button 
+                    onClick={handleGenerateEvolutionOnboarding}
+                    className="py-2.5 px-6 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition"
+                  >
+                    Reintentar
+                  </button>
                 </div>
               )}
             </div>
