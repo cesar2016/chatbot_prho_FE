@@ -691,7 +691,7 @@ Responde en el mismo idioma que el usuario.`
           if (userIdx !== -1) {
             list[userIdx] = { 
               role: 'user', 
-              content: `📷 [Imagen enviada]\n\n🔍 [Interpretación IA]: ${interpretation}` 
+              content: '📷 [Imagen recibida]' 
             };
           }
           return list;
@@ -702,7 +702,7 @@ Responde en el mismo idioma que el usuario.`
       } catch (err: any) {
         setTestMessages(prev => {
           const filtered = prev.filter(m => !m.isLoading);
-          return [...filtered, { role: 'bot', content: `⚠️ Error analizando imagen: ${err.message || 'Error desconocido'}` }];
+          return [...filtered, { role: 'bot', content: `⚠️ Error procesando imagen: ${err.message || 'Error desconocido'}` }];
         });
       }
     };
@@ -716,8 +716,8 @@ Responde en el mismo idioma que el usuario.`
 
     setTestMessages(prev => [
       ...prev, 
-      { role: 'user', content: '🎙️ [Audio cargado]: Transcribiendo...' },
-      { role: 'bot', content: '🎙️ Transcribiendo nota de voz con Groq Whisper...', isLoading: true }
+      { role: 'user', content: '🎙️ [Nota de voz cargada]...' },
+      { role: 'bot', content: '🎙️ Procesando nota de voz...', isLoading: true }
     ]);
 
     try {
@@ -737,15 +737,15 @@ Responde en el mismo idioma que el usuario.`
 
       const data = await res.json();
       const transcribed = data.text?.trim();
-      if (!transcribed) throw new Error('No se pudo transcribir el audio o está vacío');
+      if (!transcribed) throw new Error('No se pudo procesar el audio o está vacío');
 
       setTestMessages(prev => {
         const list = [...prev];
-        const userIdx = list.findIndex(m => m.content.includes('[Audio cargado]: Transcribiendo...'));
+        const userIdx = list.findIndex(m => m.content.includes('[Nota de voz cargada]...'));
         if (userIdx !== -1) {
           list[userIdx] = { 
             role: 'user', 
-            content: `🎙️ [Audio transcrito]: "${transcribed}"` 
+            content: '🎙️ [Nota de voz recibida]' 
           };
         }
         return list;
@@ -1528,14 +1528,6 @@ Responde en el mismo idioma que el usuario.`
                                   Tu navegador no soporta el reproductor de audio.
                                 </audio>
                               </div>
-                              {msg.metadata?.transcription && (
-                                <div className="text-[11px] text-slate-600 dark:text-slate-300 italic bg-white/80 dark:bg-slate-800/80 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/50 shadow-xs">
-                                  <span className="font-semibold not-italic block text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">
-                                    🎙️ Transcripción Whisper:
-                                  </span>
-                                  "{msg.metadata.transcription}"
-                                </div>
-                              )}
                             </div>
                           );
                         }
@@ -1553,14 +1545,6 @@ Responde en el mismo idioma que el usuario.`
                                 <p className="text-xs text-slate-700 dark:text-slate-300 font-medium px-1">
                                   {msg.metadata.caption}
                                 </p>
-                              )}
-                              {msg.metadata?.interpretation && (
-                                <div className="text-[11px] text-slate-600 dark:text-slate-300 italic bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/50 shadow-xs">
-                                  <span className="font-semibold not-italic block text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">
-                                    👁️ Interpretación Groq Vision:
-                                  </span>
-                                  {msg.metadata.interpretation}
-                                </div>
                               )}
                             </div>
                           );
@@ -1826,14 +1810,7 @@ Responde en el mismo idioma que el usuario.`
                                         const isImage = msg.message_type === 'image' || cStr.includes('/chat-media/images/') || /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(cStr);
 
                                         if (isAudio) {
-                                          return (
-                                            <div className="space-y-1">
-                                              <audio controls preload="metadata" src={cStr} className="w-56 h-9 rounded mt-1 outline-none" />
-                                              {msg.metadata?.transcription && (
-                                                <p className="italic opacity-80 text-[10px]">"{msg.metadata.transcription}"</p>
-                                              )}
-                                            </div>
-                                          );
+                                          return <audio controls preload="metadata" src={cStr} className="w-56 h-9 rounded mt-1 outline-none" />;
                                         }
                                         if (isImage) {
                                           return <img src={cStr} alt="Imagen" className="max-h-36 rounded-lg mt-1 object-cover cursor-pointer" onClick={() => window.open(cStr, '_blank')} />;

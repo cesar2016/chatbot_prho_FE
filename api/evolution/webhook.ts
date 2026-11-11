@@ -232,8 +232,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const transcription = await transcribeAudio(media.base64, media.mimetype, groqKey);
           if (transcription) {
             queryForRAG = transcription;
-            mediaMetadata = { transcription };
-            console.log(`✅ Audio transcrito para RAG: "${transcription}"`);
+            mediaMetadata = null;
+            console.log(`✅ Audio procesado para sugerencia RAG (no transcrito en chat): "${transcription.substring(0, 80)}..."`);
           } else {
             queryForRAG = 'El cliente envió una nota de voz.';
           }
@@ -268,11 +268,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const interpretation = await interpretImage(media.base64, caption, groqKey);
           if (interpretation) {
             queryForRAG = caption ? `${caption}. ${interpretation}` : interpretation;
-            mediaMetadata = { caption, interpretation };
-            console.log(`✅ Imagen interpretada para RAG: "${interpretation.substring(0, 100)}..."`);
+            mediaMetadata = caption ? { caption } : null;
+            console.log(`✅ Imagen procesada para sugerencia RAG (no transcrita en chat): "${interpretation.substring(0, 80)}..."`);
           } else {
             queryForRAG = caption || 'El cliente envió una imagen.';
-            mediaMetadata = { caption };
+            mediaMetadata = caption ? { caption } : null;
           }
           textToSave = publicMediaUrl || (caption ? `📷 [Imagen]: "${caption}"` : `📷 [Imagen recibida]`);
         } else {
