@@ -509,7 +509,8 @@ export default function App() {
         .rpc('match_documents', {
           query_embedding: vectorString,
           match_threshold: 0.15,
-          match_count: 3
+          match_count: 3,
+          p_tenant_id: currentUser?.tenant_id || null
         });
 
       if (error) throw error;
