@@ -523,17 +523,60 @@ export default function App() {
         .eq('id', activeConv.id);
 
       // Enviar por WhatsApp via Evolution API
-      await fetch('/api/evolution/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: activeConv.phone,
-          mediaUrl: publicMediaUrl,
-          mediaType: type,
-          tenant_id: currentUser.tenant_id,
-          db_message_id: newMsg?.id
-        })
+      const sendPayload = JSON.stringify({
+        phone: activeConv.phone,
+        mediaUrl: publicMediaUrl,
+        mediaType: type,
+        tenant_id: currentUser.tenant_id,
+        db_message_id: newMsg?.id
       });
+
+      const callEvolutionSend = async () => {
+        const res = await fetch('/api/evolution/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: sendPayload
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData?.error || `Error del servidor (${res.status})`);
+        }
+      };
+
+      try {
+        await callEvolutionSend();
+      } catch (sendErr: any) {
+        // Si la respuesta se cortó (Failed to fetch / timeout) pero el servidor ya lo envió, verificar en BD antes de reintentar o alertar
+        let alreadySent = false;
+        if (newMsg?.id) {
+          await new Promise(r => setTimeout(r, 1500));
+          const { data: checkMsg } = await supabase
+            .from('messages')
+            .select('external_id')
+            .eq('id', newMsg.id)
+            .single();
+          alreadySent = Boolean(checkMsg?.external_id);
+        }
+        if (!alreadySent) {
+          try {
+            await callEvolutionSend();
+          } catch (retryErr: any) {
+            if (newMsg?.id) {
+              const { data: finalCheck } = await supabase
+                .from('messages')
+                .select('external_id')
+                .eq('id', newMsg.id)
+                .single();
+              if (finalCheck?.external_id) {
+                alreadySent = true;
+              }
+            }
+            if (!alreadySent) {
+              throw retryErr || sendErr;
+            }
+          }
+        }
+      }
 
       setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
       setRefreshTrigger(t => t + 1);

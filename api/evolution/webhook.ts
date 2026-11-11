@@ -156,11 +156,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const item of messagesList) {
         const key = item?.key;
         const update = item?.update;
-        const waMsgId = key?.id;
+        const waMsgId = item?.keyId || key?.id || item?.data?.keyId;
         if (!waMsgId) continue;
 
         let statusStr = 'sent';
-        const st = update?.status ?? item?.status;
+        const st = item?.status ?? update?.status;
         if (st === 4 || st === 'PLAYED' || st === 3 || st === 'READ') {
           statusStr = 'read';
         } else if (st === 2 || st === 'DELIVERY_ACK' || st === 'DELIVERED') {

@@ -94,18 +94,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const data = await response.json();
     const waMessageId = data?.key?.id || null;
 
+    const dbUpdates: PromiseLike<any>[] = [];
     if (db_message_id) {
-      await supabaseAdmin.from('messages').update({
-        external_id: waMessageId,
-        metadata: { status: 'sent' }
-      }).eq('id', db_message_id);
+      dbUpdates.push(
+        supabaseAdmin.from('messages').update({
+          external_id: waMessageId,
+          metadata: { status: 'sent' }
+        }).eq('id', db_message_id)
+      );
     }
 
     // 2. Ensure tenant record has this instanceName registered
     if (tenant_id) {
-      await supabaseAdmin.from('tenants').update({ kapso_phone_number_id: instanceName }).eq('id', tenant_id);
+      dbUpdates.push(
+        supabaseAdmin.from('tenants').update({ kapso_phone_number_id: instanceName }).eq('id', tenant_id)
+      );
     }
-    return res.status(200).json({ status: 'success', messageId: waMessageId, data });
+
+    if (dbUpdates.length > 0) {
+      await Promise.all(dbUpdates);
+    }
+
+    return res.status(200).json({ status: 'success', messageId: waMessageId });
 
   } catch (error: any) {
     console.error('Evolution Send Exception:', error);
