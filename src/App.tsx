@@ -24,6 +24,9 @@ export default function App() {
   const [activeConv, setActiveConv] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
+  const chatImageInputRef = useRef<HTMLInputElement>(null);
+  const chatAudioInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
   const [aiSuggestion, setAiSuggestion] = useState("");
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
@@ -434,6 +437,77 @@ export default function App() {
 
     setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
     setRefreshTrigger(t => t + 1);
+  };
+
+  const handleSendChatMedia = async (file: File, type: 'image' | 'audio') => {
+    if (!activeConv || !currentUser) return;
+    setIsUploadingMedia(true);
+    try {
+      const ext = file.name ? (file.name.split('.').pop() || (type === 'image' ? 'jpg' : 'mp3')) : (type === 'image' ? 'jpg' : 'mp3');
+      const folder = type === 'image' ? 'images' : 'audios';
+      const filePath = `${folder}/${Date.now()}_agent_${currentUser.id}.${ext}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from('chat-media')
+        .upload(filePath, file, {
+          contentType: file.type || (type === 'image' ? 'image/jpeg' : 'audio/mp3'),
+          upsert: true
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      const supUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mtkzkuspevnytwuflfts.supabase.co';
+      const publicMediaUrl = `${supUrl}/storage/v1/object/public/chat-media/${filePath}`;
+
+      // Actualización optimista en el chat
+      const optimisticMsg = {
+        id: `temp-${Date.now()}`,
+        conversation_id: activeConv.id,
+        sender_type: 'agent',
+        sender_id: String(currentUser.id),
+        message_type: type,
+        content: publicMediaUrl,
+        created_at: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      // Guardar en Supabase
+      const { error: msgError } = await supabase.from('messages')
+        .insert([{
+          conversation_id: activeConv.id,
+          sender_type: 'agent',
+          sender_id: String(currentUser.id),
+          message_type: type,
+          content: publicMediaUrl,
+          tenant_id: currentUser.tenant_id
+        }]);
+
+      if (msgError) console.error('Error guardando mensaje multimedia en BD:', msgError);
+
+      await supabase.from('conversations')
+        .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
+        .eq('id', activeConv.id);
+
+      // Enviar por WhatsApp via Evolution API
+      await fetch('/api/evolution/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: activeConv.phone,
+          mediaUrl: publicMediaUrl,
+          mediaType: type,
+          tenant_id: currentUser.tenant_id
+        })
+      });
+
+      setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
+      setRefreshTrigger(t => t + 1);
+    } catch (err: any) {
+      console.error('Error enviando archivo multimedia:', err);
+      alert(`Error al enviar ${type === 'image' ? 'la imagen' : 'el audio'}: ` + (err.message || 'Error desconocido'));
+    } finally {
+      setIsUploadingMedia(false);
+    }
   };
 
   const handleResetChats = async () => {
@@ -1607,7 +1681,30 @@ Responde en el mismo idioma que el usuario.`
             )}
 
             {/* Manual Reply Input Space */}
-            <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex gap-3 shadow-ambient relative z-30">
+            <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 shadow-ambient relative z-30">
+              <input 
+                type="file" 
+                ref={chatImageInputRef} 
+                accept="image/*" 
+                className="hidden" 
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleSendChatMedia(file, 'image');
+                  e.target.value = '';
+                }} 
+              />
+              <input 
+                type="file" 
+                ref={chatAudioInputRef} 
+                accept="audio/*" 
+                className="hidden" 
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleSendChatMedia(file, 'audio');
+                  e.target.value = '';
+                }} 
+              />
+
               <button 
                 title="Mensaje de Presentación"
                 onClick={() => setReplyText(`Hola Soy ${currentUser?.name || 'Agente'} del hotel Colinas, en que puedo ayudarte?`)}
@@ -1616,17 +1713,39 @@ Responde en el mismo idioma que el usuario.`
                 👋
               </button>
 
+              <button
+                type="button"
+                disabled={isUploadingMedia}
+                onClick={() => chatImageInputRef.current?.click()}
+                title="Adjuntar y enviar foto o imagen"
+                className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700/60 transition-all border border-slate-200/60 dark:border-slate-700 disabled:opacity-50"
+              >
+                <ImageIcon size={20} />
+              </button>
+
+              <button
+                type="button"
+                disabled={isUploadingMedia}
+                onClick={() => chatAudioInputRef.current?.click()}
+                title="Adjuntar y enviar nota de voz o audio"
+                className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700/60 transition-all border border-slate-200/60 dark:border-slate-700 disabled:opacity-50"
+              >
+                <Mic size={20} />
+              </button>
+
               <input 
                 type="text" 
-                placeholder="Escribe un mensaje al cliente..." 
-                className="flex-1 px-5 py-3 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium" 
+                placeholder={isUploadingMedia ? "Subiendo y enviando archivo multimedia..." : "Escribe un mensaje al cliente..."} 
+                disabled={isUploadingMedia}
+                className="flex-1 px-5 py-3 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-slate-800 dark:text-slate-200 disabled:opacity-60" 
                 value={replyText}
                 onChange={(e) => setReplyText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendManualMessage()}
               />
               <button 
+                disabled={isUploadingMedia}
                 onClick={handleSendManualMessage}
-                className="px-5 p-3 relative group w-14 rounded-2xl flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 transform transition-all active:scale-95">
+                className="px-5 p-3 relative group w-14 rounded-2xl flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 transform transition-all active:scale-95 disabled:opacity-50">
                 <Send size={20} className="ml-1 group-hover:translate-x-1 transition-transform" />
               </button>
             </div>

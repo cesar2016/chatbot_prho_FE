@@ -173,10 +173,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     for (const msg of messagesList) {
       if (!msg || !msg.key) continue;
 
-      // Descartar mensajes salientes enviados desde el teléfono propio para evitar bucles
-      if (msg.key.fromMe) {
-        continue;
-      }
+      const isFromMe = !!msg.key.fromMe;
 
       const remoteJid = msg.key.remoteJid || '';
 
@@ -290,7 +287,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         p_phone: fromPhone,
         p_name: senderName,
         p_text: textToSave,
-        p_is_bot: false,
+        p_is_bot: isFromMe,
         p_phone_number_id: instance
       });
 
@@ -305,21 +302,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const msgId = dbData?.msg_id || dbData?.message_id;
       const resolvedTenantId = dbData?.tenant_id || tenantIdFromInstance;
 
-      // Si es audio o imagen, actualizar message_type, content con la URL pública y metadata
-      if (msgId && (mediaType === 'audio' || mediaType === 'image') && publicMediaUrl) {
-        await supabaseAdmin.from('messages').update({
-          message_type: mediaType,
-          content: publicMediaUrl,
-          metadata: mediaMetadata
-        }).eq('id', msgId);
+      // Actualizar tipo de mensaje, contenido multimedia y sender_type
+      if (msgId) {
+        const updatePayload: any = {};
+        if ((mediaType === 'audio' || mediaType === 'image') && publicMediaUrl) {
+          updatePayload.message_type = mediaType;
+          updatePayload.content = publicMediaUrl;
+          updatePayload.metadata = mediaMetadata;
+        }
+        if (isFromMe) {
+          updatePayload.sender_type = 'agent';
+        }
+        if (Object.keys(updatePayload).length > 0) {
+          await supabaseAdmin.from('messages').update(updatePayload).eq('id', msgId);
+        }
       }
 
       // Asegurar el tenant_id en conversations y messages para Realtime
       if (convId && resolvedTenantId) {
-        await supabaseAdmin.from('conversations').update({ tenant_id: resolvedTenantId }).eq('id', convId);
+        await supabaseAdmin.from('conversations').update({ 
+          tenant_id: resolvedTenantId,
+          ...(isFromMe ? { mode: 'HUMAN', last_message_at: new Date().toISOString() } : {})
+        }).eq('id', convId);
         if (msgId) {
           await supabaseAdmin.from('messages').update({ tenant_id: resolvedTenantId }).eq('id', msgId);
         }
+      }
+
+      // Si fue enviado por el agente desde su WhatsApp, no generamos sugerencia IA para evitar bucles
+      if (isFromMe) {
+        console.log(`📤 Mensaje saliente enviado por el agente a ${fromPhone} registrado con éxito.`);
+        continue;
       }
 
       // 2. Generación automática de Sugerencia IA en segundo plano (RAG)

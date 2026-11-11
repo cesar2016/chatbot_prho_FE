@@ -6,10 +6,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { phone, message, tenant_id } = req.body;
+  const { phone, message, mediaUrl, mediaType, tenant_id } = req.body;
 
-  if (!phone || !message) {
-    return res.status(400).json({ error: 'Faltan parámetros requeridos (phone, message)' });
+  if (!phone || (!message && !mediaUrl)) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos (phone y message o mediaUrl)' });
   }
 
   const evoUrl = process.env.EVOLUTION_API_URL || 'https://evolution-api-production-a710d.up.railway.app';
@@ -22,18 +22,68 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const cleanPhone = String(phone).replace(/\D/g, '');
 
   try {
-    // 1. Send text message via Evolution API
-    const response = await fetch(`${evoUrl}/message/sendText/${instanceName}`, {
-      method: 'POST',
-      headers: {
-        'apikey': evoKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        number: cleanPhone,
-        text: message
-      })
-    });
+    let response;
+
+    // 1. Envío de Audio
+    if (mediaUrl && mediaType === 'audio') {
+      response = await fetch(`${evoUrl}/message/sendWhatsAppAudio/${instanceName}`, {
+        method: 'POST',
+        headers: {
+          'apikey': evoKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          number: cleanPhone,
+          audio: mediaUrl
+        })
+      });
+
+      // Fallback a sendMedia si sendWhatsAppAudio requiere otro formato
+      if (!response.ok) {
+        response = await fetch(`${evoUrl}/message/sendMedia/${instanceName}`, {
+          method: 'POST',
+          headers: {
+            'apikey': evoKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            number: cleanPhone,
+            mediatype: 'audio',
+            media: mediaUrl
+          })
+        });
+      }
+    } 
+    // 2. Envío de Imagen
+    else if (mediaUrl && mediaType === 'image') {
+      response = await fetch(`${evoUrl}/message/sendMedia/${instanceName}`, {
+        method: 'POST',
+        headers: {
+          'apikey': evoKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          number: cleanPhone,
+          mediatype: 'image',
+          media: mediaUrl,
+          caption: message || ''
+        })
+      });
+    } 
+    // 3. Envío de Texto tradicional
+    else {
+      response = await fetch(`${evoUrl}/message/sendText/${instanceName}`, {
+        method: 'POST',
+        headers: {
+          'apikey': evoKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          number: cleanPhone,
+          text: message
+        })
+      });
+    }
 
     if (!response.ok) {
       const errText = await response.text();
