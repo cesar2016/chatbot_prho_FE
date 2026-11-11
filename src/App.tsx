@@ -202,6 +202,12 @@ export default function App() {
     if (activeConv?.id) fetchMessages(activeConv.id);
   }, [refreshTrigger, activeConv?.id, currentUser?.tenant_id]);
 
+  useEffect(() => {
+    if (activeView === 'knowledge' && currentUser?.tenant_id) {
+      fetchKnowledgeDocs();
+    }
+  }, [activeView, currentUser?.tenant_id]);
+
   const fetchData = async () => {
     if (!currentUser?.tenant_id) return;
     
@@ -471,6 +477,10 @@ export default function App() {
   const [knowledgeText, setKnowledgeText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const [knowledgeDocs, setKnowledgeDocs] = useState<any[]>([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   
   // Test Bot Modal State
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
@@ -626,11 +636,69 @@ Responde en el mismo idioma que el usuario.`
       
       setSaveMessage('¡Conocimiento vectorizado y guardado con éxito!');
       setKnowledgeText('');
+      fetchKnowledgeDocs();
     } catch (error: any) {
       console.error(error);
       setSaveMessage(`⚠️ ${error.message || 'Error: No se pudo conectar con Supabase o Voyage.'}`);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const fetchKnowledgeDocs = async () => {
+    if (!currentUser?.tenant_id) return;
+    setIsLoadingDocs(true);
+    try {
+      const { data, error } = await supabase
+        .from('knowledge_documents')
+        .select('id, content, created_at, tenant_id')
+        .eq('tenant_id', currentUser.tenant_id)
+        .order('id', { ascending: false });
+
+      if (error) throw error;
+      setKnowledgeDocs(data || []);
+    } catch (e) {
+      console.error('Error al cargar fragmentos de conocimiento:', e);
+    } finally {
+      setIsLoadingDocs(false);
+    }
+  };
+
+  const handleDeleteDoc = async (id: number) => {
+    try {
+      const { error } = await supabase
+        .from('knowledge_documents')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setKnowledgeDocs(prev => prev.filter(d => d.id !== id));
+      setSaveMessage('Fragmento eliminado de la memoria.');
+    } catch (e: any) {
+      console.error('Error al eliminar fragmento:', e);
+      alert('Error al eliminar fragmento: ' + (e.message || 'Error desconocido'));
+    }
+  };
+
+  const handleResetKnowledge = async () => {
+    if (!currentUser?.tenant_id) return;
+    setIsResetting(true);
+    try {
+      const { error } = await supabase
+        .from('knowledge_documents')
+        .delete()
+        .eq('tenant_id', currentUser.tenant_id);
+
+      if (error) throw error;
+
+      setKnowledgeDocs([]);
+      setSaveMessage('✅ Memoria reiniciada con éxito. La base de conocimiento está en cero (0).');
+      setIsResetModalOpen(false);
+    } catch (e: any) {
+      console.error('Error al reiniciar memoria:', e);
+      setSaveMessage(`⚠️ Error al reiniciar memoria: ${e.message || 'Error desconocido'}`);
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -1551,16 +1619,32 @@ Responde en el mismo idioma que el usuario.`
         <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col p-4 pb-20 md:p-12 relative w-full items-center">
           
           <div className="w-full max-w-4xl">
-            <div className="mb-10 text-center">
+            <div className="mb-8 text-center">
               <div className="inline-flex items-center justify-center p-4 bg-gradient-to-tr from-indigo-100 to-purple-100 dark:from-indigo-900/50 dark:to-purple-900/50 rounded-3xl mb-4 shadow-sm border border-indigo-200 dark:border-indigo-800/50">
                 <Database size={40} className="text-indigo-600 dark:text-indigo-400" />
               </div>
               <h2 className="text-4xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 tracking-tight">
                 Alimentar Conocimiento IA
               </h2>
-              <p className="text-slate-500 dark:text-slate-400 mt-4 text-lg mx-auto">
+              <p className="text-slate-500 dark:text-slate-400 mt-3 text-lg mx-auto">
                 Introduce información sobre tu hotel y la guardaremos optimizada como Embeddings y RAG utilizando <span className="font-bold text-indigo-500">Voyage AI</span>.
               </p>
+
+              {/* Status and Reset Bar */}
+              <div className="mt-6 inline-flex flex-wrap items-center justify-center gap-3 bg-white dark:bg-slate-900 px-5 py-2.5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+                  <span className={`w-2.5 h-2.5 rounded-full ${knowledgeDocs.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
+                  Memoria activa: <strong className="text-indigo-600 dark:text-indigo-400 font-bold">{knowledgeDocs.length}</strong> fragmentos aprendidos
+                </div>
+                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block"></div>
+                <button
+                  onClick={() => setIsResetModalOpen(true)}
+                  disabled={knowledgeDocs.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-sm"
+                >
+                  <Trash2 size={14} /> Resetear Memoria (Poner a cero 0)
+                </button>
+              </div>
             </div>
 
             <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden transform transition-all">
@@ -1587,9 +1671,16 @@ Responde en el mismo idioma que el usuario.`
                     className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-indigo-600 dark:text-indigo-400 font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-3 shadow-md border border-slate-200 dark:border-slate-700 transform hover:-translate-y-1 active:scale-95 transition-all">
                     <MessageCircle size={22} /> Probar Bot (Testing RAG)
                   </button>
+                  <button 
+                    onClick={() => setIsResetModalOpen(true)}
+                    disabled={knowledgeDocs.length === 0}
+                    className="sm:w-auto px-5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-bold py-4 rounded-2xl flex items-center justify-center gap-2 border border-rose-200 dark:border-rose-800/60 shadow-sm transform hover:-translate-y-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none"
+                    title="Vaciar toda la memoria del bot a 0">
+                    <Trash2 size={20} /> Reset (0)
+                  </button>
                 </div>
                 {saveMessage && (
-                  <p className={`mt-4 text-center font-semibold text-sm ${saveMessage.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>
+                  <p className={`mt-4 text-center font-semibold text-sm ${saveMessage.includes('Error') || saveMessage.includes('⚠️') ? 'text-red-500' : 'text-green-500'}`}>
                     {saveMessage}
                   </p>
                 )}
@@ -1600,7 +1691,115 @@ Responde en el mismo idioma que el usuario.`
                 </span>
               </div>
             </div>
+
+            {/* List of active knowledge fragments */}
+            <div className="mt-8 bg-white dark:bg-slate-900 rounded-3xl shadow-lg border border-slate-200 dark:border-slate-800 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <BookOpen size={20} className="text-indigo-600 dark:text-indigo-400" />
+                  <h3 className="font-bold text-slate-800 dark:text-slate-200 text-lg">
+                    Fragmentos en memoria ({knowledgeDocs.length})
+                  </h3>
+                </div>
+                {knowledgeDocs.length > 0 && (
+                  <button
+                    onClick={() => setIsResetModalOpen(true)}
+                    className="text-xs text-rose-500 hover:text-rose-700 dark:hover:text-rose-400 font-semibold flex items-center gap-1 transition-colors"
+                  >
+                    <Trash2 size={13} /> Vaciar todo a cero
+                  </button>
+                )}
+              </div>
+
+              {isLoadingDocs ? (
+                <div className="py-8 text-center text-slate-400 text-sm flex items-center justify-center gap-2">
+                  <RefreshCw size={16} className="animate-spin text-indigo-500" /> Cargando fragmentos en memoria...
+                </div>
+              ) : knowledgeDocs.length === 0 ? (
+                <div className="py-10 text-center text-slate-400 dark:text-slate-500 text-sm bg-slate-50 dark:bg-slate-950/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+                  <span className="text-2xl block mb-2">🧠</span>
+                  La memoria está en cero (0). El bot no tiene fragmentos de conocimiento cargados.
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                  {knowledgeDocs.map((doc, idx) => (
+                    <div 
+                      key={doc.id}
+                      className="p-4 bg-slate-50 dark:bg-slate-950/60 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 flex items-start justify-between gap-4 group hover:border-indigo-300 dark:hover:border-indigo-700 transition-all"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+                            Fragmento #{knowledgeDocs.length - idx}
+                          </span>
+                          {doc.created_at && (
+                            <span className="text-[11px] text-slate-400">
+                              {new Date(doc.created_at).toLocaleDateString()} {new Date(doc.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-relaxed">
+                          {doc.content}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteDoc(doc.id)}
+                        title="Eliminar este fragmento"
+                        className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-all"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* Reset Knowledge Confirmation Modal */}
+          {isResetModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div 
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+                onClick={() => !isResetting && setIsResetModalOpen(false)}
+              />
+              <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
+                <div className="w-14 h-14 rounded-2xl bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400 mb-4 border border-rose-200 dark:border-rose-800/50">
+                  <AlertCircle size={28} />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+                  ¿Reiniciar memoria a cero (0)?
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+                  Esta acción eliminará todos los <strong className="text-slate-800 dark:text-slate-200">{knowledgeDocs.length} fragmento(s)</strong> de conocimiento de tu hotel. El bot volverá a tener memoria cero (0) y no recordará información previa.
+                </p>
+                <div className="flex gap-3 w-full">
+                  <button
+                    onClick={() => setIsResetModalOpen(false)}
+                    disabled={isResetting}
+                    className="flex-1 py-3 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-all disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleResetKnowledge}
+                    disabled={isResetting}
+                    className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold transition-all shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isResetting ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin" /> Vaciando...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 size={16} /> Sí, volver a 0
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Test Bot Modal Overlay */}
           {isTestModalOpen && (
