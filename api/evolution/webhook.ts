@@ -400,7 +400,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 messages: [
                   {
                     role: 'system',
-                    content: `Eres el asistente virtual del hotel. El cliente te contactó por WhatsApp (puede haber enviado un texto, un audio transcripto o una imagen/comprobante analizado). Responde usando SOLO la información del contexto de conocimiento provisto. Si la pregunta no tiene respuesta en el contexto, dilo amablemente sin inventar. Si envió un comprobante o consulta de reserva, respóndele de forma atenta y profesional.\n\n=== CONOCIMIENTO DEL HOTEL ===\n${contextBlock}\n=== FIN DEL CONOCIMIENTO ===\n\nResponde en el mismo idioma que el usuario.`
+                    content: `Eres Alin, la asistente virtual inteligente. El cliente te contactó por WhatsApp (puede haber enviado un texto, una nota de voz o una imagen). Responde de manera cordial, empática y profesional basándote en la información del contexto provisto. Preséntate como Alin. Si la pregunta no se encuentra en el contexto, indícalo amablemente sin inventar datos. Responde en español.\n\n=== CONOCIMIENTO DE LA EMPRESA ===\n${contextBlock}\n=== FIN DEL CONOCIMIENTO ===`
                   },
                   { role: 'user', content: queryForRAG }
                 ]
@@ -419,7 +419,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   tenant_id: resolvedTenantId,
                   status: 'PENDING'
                 }]);
-                console.log(`🤖 Sugerencia IA creada para conversación ${convId}`);
+                console.log(`🤖 Sugerencia de Alin creada para conversación ${convId}`);
+
+                // Activar modo AI_SUGGEST en la conversación para mostrar la sugerencia de Alin al agente
+                await supabaseAdmin
+                  .from('conversations')
+                  .update({ mode: 'AI_SUGGEST' })
+                  .eq('id', convId);
 
                 // Si la conversación está en modo 'BOT', responder directamente a WhatsApp
                 const { data: convInfo } = await supabaseAdmin

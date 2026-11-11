@@ -29,6 +29,28 @@ export default function App() {
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
   const [aiSuggestion, setAiSuggestion] = useState("");
+  const [listenedAudios, setListenedAudios] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('listened_audios');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const markAudioListened = (audioUrl: string) => {
+    if (!audioUrl) return;
+    setListenedAudios(prev => {
+      if (prev[audioUrl]) return prev;
+      const updated = { ...prev, [audioUrl]: true };
+      try {
+        localStorage.setItem('listened_audios', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Could not save listened audios to localStorage', e);
+      }
+      return updated;
+    });
+  };
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
@@ -1578,23 +1600,44 @@ Responde en el mismo idioma que el usuario.`
 
                         if (isAudio) {
                           const isOgg = contentStr.includes('.ogg');
+                          const isPlayed = !!listenedAudios[contentStr];
                           return (
-                            <div className="space-y-2 min-w-[260px] max-w-full">
-                              <div className="flex items-center justify-between gap-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-                                <span className="flex items-center gap-1.5"><Mic size={15} /> Nota de voz</span>
-                                <a 
-                                  href={contentStr} 
-                                  target="_blank" 
-                                  rel="noreferrer" 
-                                  className="text-[10px] text-slate-400 hover:text-indigo-500 underline font-normal"
-                                >
-                                  Abrir audio
-                                </a>
+                            <div className="space-y-2 min-w-[270px] max-w-full">
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <span className={`flex items-center gap-1.5 font-semibold ${isPlayed ? 'text-indigo-600 dark:text-indigo-400' : 'text-emerald-600 dark:text-emerald-400 font-bold'}`}>
+                                  <Mic size={15} /> Nota de voz
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  {isPlayed ? (
+                                    <span className="flex items-center gap-1 text-[10px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-full border border-blue-200/80 dark:border-blue-800">
+                                      <CheckCheck size={13} className="text-blue-500" /> Escuchado
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-700 shadow-xs">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block"></span>
+                                      Sin escuchar
+                                    </span>
+                                  )}
+                                  <a 
+                                    href={contentStr} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="text-[10px] text-slate-400 hover:text-indigo-500 underline font-normal"
+                                  >
+                                    Abrir
+                                  </a>
+                                </div>
                               </div>
-                              <div className="bg-slate-50 dark:bg-slate-900/60 p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/60 shadow-inner">
+                              <div className={`p-2 rounded-xl border shadow-inner transition-colors ${
+                                isPlayed 
+                                  ? 'bg-slate-50 dark:bg-slate-900/60 border-slate-200/80 dark:border-slate-700/60 border-l-4 border-l-blue-400' 
+                                  : 'bg-emerald-50/50 dark:bg-emerald-950/30 border-emerald-200/80 dark:border-emerald-800/60 border-l-4 border-l-emerald-500'
+                              }`}>
                                 <audio 
                                   controls 
                                   preload="metadata" 
+                                  onPlay={() => markAudioListened(contentStr)}
+                                  onEnded={() => markAudioListened(contentStr)}
                                   className="w-full h-10 outline-none"
                                 >
                                   <source src={contentStr} type={isOgg ? 'audio/ogg; codecs=opus' : 'audio/mpeg'} />
@@ -1638,7 +1681,7 @@ Responde en el mismo idioma que el usuario.`
               })}
               
               {/* Invisible spacer so absolute panel doesn't hide the last message */}
-              {activeConv.mode === 'AI_SUGGEST' && (
+              {(activeConv.mode === 'AI_SUGGEST' || Boolean(aiSuggestion)) && (
                 <div className="h-[220px] w-full flex-shrink-0"></div>
               )}
               
@@ -1646,7 +1689,7 @@ Responde en el mismo idioma que el usuario.`
             </div>
 
             {/* AI Suggestion Premium Panel (Glassmorphism) */}
-            {activeConv.mode === 'AI_SUGGEST' && (
+            {(activeConv.mode === 'AI_SUGGEST' || Boolean(aiSuggestion)) && (
               <div className="px-6 py-4 absolute bottom-20 left-0 right-0 z-20">
                 <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-indigo-100 dark:border-indigo-900/50 p-5 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)]">
                   <div className="flex justify-between items-center mb-3">
@@ -1655,11 +1698,11 @@ Responde en el mismo idioma que el usuario.`
                         <Sparkles size={16} className="text-white" />
                       </div>
                       <span className="font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-700 to-indigo-700 dark:from-purple-400 dark:to-indigo-400 text-sm">
-                        Sugerencia IA generada
+                        Sugerencia de Alin generada
                       </span>
                     </div>
                     <div className="flex items-center gap-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-3 py-1 rounded-full text-xs font-bold border border-green-200 dark:border-green-800/50">
-                      <Clock size={12} /> 95% Confianza
+                      <Clock size={12} /> Alin IA
                     </div>
                   </div>
                   <textarea 
