@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, UserCircle2, Bot, Send, User, X,
   Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight,
-  CheckCircle2, AlertCircle, Phone, RefreshCw
+  CheckCircle2, AlertCircle, Phone, RefreshCw, Image as ImageIcon, Mic
 } from 'lucide-react';
 import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
@@ -60,6 +60,8 @@ export default function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const testImageInputRef = useRef<HTMLInputElement>(null);
+  const testAudioInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (activeView === 'chat') {
@@ -527,19 +529,10 @@ export default function App() {
     return data.data[0].embedding;
   };
 
-  const handleSendTestMessage = async () => {
-    if (!testInput.trim()) return;
-    
-    const userMsg = { role: 'user', content: testInput };
-    setTestMessages(prev => [...prev, userMsg]);
-    setTestInput('');
-    
-    const tempBotMsg = { role: 'bot', content: '💬 Pensando...', isLoading: true };
-    setTestMessages(prev => [...prev, tempBotMsg]);
-
+  const executeRagQuery = async (queryText: string) => {
     try {
-      // 1. Embed user query with Voyage AI
-      const embedding = await fetchVoyageEmbedding(userMsg.content, (sec) => {
+      // 1. Embed query with Voyage AI
+      const embedding = await fetchVoyageEmbedding(queryText, (sec) => {
         setTestMessages(prev => prev.map(m => m.isLoading ? { ...m, content: `⏳ Límite de tasa de Voyage AI (3 RPM). Reintentando en ${sec}s...` } : m));
       });
       
@@ -584,7 +577,7 @@ export default function App() {
           messages: [
             {
               role: 'system',
-              content: `Eres el asistente virtual del hotel. Responde usando SOLO la información del contexto de conocimiento provisto. Si la pregunta no tiene respuesta en el contexto, dilo amablemente sin inventar. Sé conciso y profesional.
+              content: `Eres el asistente virtual del hotel. El cliente te contacta (puede ser una pregunta de texto, audio transcripto o imagen analizada). Responde usando SOLO la información del contexto de conocimiento provisto. Si la pregunta no tiene respuesta en el contexto, dilo amablemente sin inventar. Sé conciso y profesional.
 
 === CONOCIMIENTO DEL HOTEL ===
 ${contextBlock}
@@ -593,7 +586,7 @@ ${contextBlock}
 Responde en el mismo idioma que el usuario.`
             },
             ...history,
-            { role: 'user', content: userMsg.content }
+            { role: 'user', content: queryText }
           ]
         })
       });
@@ -612,6 +605,147 @@ Responde en el mismo idioma que el usuario.`
       setTestMessages(prev => {
         const filtered = prev.filter(m => !m.isLoading);
         return [...filtered, { role: 'bot', content: `⚠️ ${e.message || 'Error desconocido'}` }];
+      });
+    }
+  };
+
+  const handleSendTestMessage = async () => {
+    if (!testInput.trim()) return;
+    
+    const userMsg = { role: 'user', content: testInput };
+    setTestMessages(prev => [...prev, userMsg]);
+    setTestInput('');
+    
+    const tempBotMsg = { role: 'bot', content: '💬 Pensando...', isLoading: true };
+    setTestMessages(prev => [...prev, tempBotMsg]);
+
+    await executeRagQuery(userMsg.content);
+  };
+
+  const handleTestImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64Data = reader.result as string;
+      const cleanBase64 = base64Data.replace(/^data:.*?;base64,/, '');
+
+      setTestMessages(prev => [
+        ...prev, 
+        { role: 'user', content: '📷 [Imagen cargada]: Analizando...' },
+        { role: 'bot', content: '🔍 Interpretando imagen con Groq Vision (Qwen 3.8 27B)...', isLoading: true }
+      ]);
+
+      try {
+        const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+        if (!groqKey) throw new Error('Falta VITE_GROQ_API_KEY');
+
+        const visionRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${groqKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'qwen/qwen3.8-27b',
+            temperature: 0.2,
+            max_tokens: 300,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { 
+                    type: 'text', 
+                    text: 'El cliente de un hotel envió esta imagen. Analiza detalladamente la imagen, describe qué muestra y extrae cualquier texto o dato relevante (por ejemplo, si es un comprobante de transferencia/pago, extrae monto, fecha, destinatario y número de comprobante; si es una foto de habitación, consulta, tarjeta o documento, extrae los datos clave):' 
+                  },
+                  { 
+                    type: 'image_url', 
+                    image_url: { url: `data:${file.type || 'image/jpeg'};base64,${cleanBase64}` } 
+                  }
+                ]
+              }
+            ]
+          })
+        });
+
+        const visionData = await visionRes.json();
+        const interpretation = visionData.choices?.[0]?.message?.content?.trim();
+        if (!interpretation) throw new Error('No se pudo interpretar la imagen');
+
+        setTestMessages(prev => {
+          const list = [...prev];
+          const userIdx = list.findIndex(m => m.content.includes('[Imagen cargada]: Analizando...'));
+          if (userIdx !== -1) {
+            list[userIdx] = { 
+              role: 'user', 
+              content: `📷 [Imagen enviada]\n\n🔍 [Interpretación IA]: ${interpretation}` 
+            };
+          }
+          return list;
+        });
+
+        await executeRagQuery(interpretation);
+
+      } catch (err: any) {
+        setTestMessages(prev => {
+          const filtered = prev.filter(m => !m.isLoading);
+          return [...filtered, { role: 'bot', content: `⚠️ Error analizando imagen: ${err.message || 'Error desconocido'}` }];
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleTestAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    setTestMessages(prev => [
+      ...prev, 
+      { role: 'user', content: '🎙️ [Audio cargado]: Transcribiendo...' },
+      { role: 'bot', content: '🎙️ Transcribiendo nota de voz con Groq Whisper...', isLoading: true }
+    ]);
+
+    try {
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+      if (!groqKey) throw new Error('Falta VITE_GROQ_API_KEY');
+
+      const formData = new FormData();
+      formData.append('file', file, file.name || 'audio.ogg');
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('language', 'es');
+
+      const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${groqKey}` },
+        body: formData
+      });
+
+      const data = await res.json();
+      const transcribed = data.text?.trim();
+      if (!transcribed) throw new Error('No se pudo transcribir el audio o está vacío');
+
+      setTestMessages(prev => {
+        const list = [...prev];
+        const userIdx = list.findIndex(m => m.content.includes('[Audio cargado]: Transcribiendo...'));
+        if (userIdx !== -1) {
+          list[userIdx] = { 
+            role: 'user', 
+            content: `🎙️ [Audio transcrito]: "${transcribed}"` 
+          };
+        }
+        return list;
+      });
+
+      await executeRagQuery(transcribed);
+
+    } catch (err: any) {
+      setTestMessages(prev => {
+        const filtered = prev.filter(m => !m.isLoading);
+        return [...filtered, { role: 'bot', content: `⚠️ Error transcribiendo audio: ${err.message || 'Error desconocido'}` }];
       });
     }
   };
@@ -1860,10 +1994,42 @@ Responde en el mismo idioma que el usuario.`
                 </div>
                 
                 {/* Modal Input */}
-                <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex gap-2">
+                <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+                  <input
+                    type="file"
+                    ref={testImageInputRef}
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleTestImageUpload}
+                  />
+                  <input
+                    type="file"
+                    ref={testAudioInputRef}
+                    accept="audio/*"
+                    className="hidden"
+                    onChange={handleTestAudioUpload}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => testImageInputRef.current?.click()}
+                    title="Subir y probar imagen con IA"
+                    className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 rounded-xl transition-all border border-slate-200 dark:border-slate-700"
+                  >
+                    <ImageIcon size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => testAudioInputRef.current?.click()}
+                    title="Subir y probar audio con Whisper"
+                    className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 rounded-xl transition-all border border-slate-200 dark:border-slate-700"
+                  >
+                    <Mic size={18} />
+                  </button>
+
                   <input
                     type="text"
-                    placeholder="Haz una pregunta al bot..."
+                    placeholder="Escribe, o sube una imagen / audio..."
                     className="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-950 rounded-xl outline-none text-sm transition-all text-slate-700 dark:text-slate-200"
                     value={testInput}
                     onChange={(e) => setTestInput(e.target.value)}

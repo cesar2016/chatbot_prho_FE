@@ -112,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             enabled: true,
             url: webhookUrl,
             byEvents: false,
-            base64: false,
+            base64: true,
             events: [
               'MESSAGES_UPSERT',
               'CONNECTION_UPDATE'
