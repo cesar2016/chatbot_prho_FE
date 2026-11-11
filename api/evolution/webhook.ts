@@ -150,8 +150,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? rawData
       : (rawData?.messages ? rawData.messages : (rawData ? [rawData] : []));
 
-    if (messagesList.length === 0) {
-      return res.status(200).json({ status: 'no_messages' });
+    // 1. Manejo de eventos de actualización de estado de mensajes (checks / ticks)
+    if (event === 'messages.update' || event === 'MESSAGES_UPDATE') {
+      console.log('🔄 Evento MESSAGES_UPDATE recibido:', JSON.stringify(messagesList, null, 2));
+      for (const item of messagesList) {
+        const key = item?.key;
+        const update = item?.update;
+        const waMsgId = key?.id;
+        if (!waMsgId) continue;
+
+        let statusStr = 'sent';
+        const st = update?.status ?? item?.status;
+        if (st === 4 || st === 'PLAYED' || st === 3 || st === 'READ') {
+          statusStr = 'read';
+        } else if (st === 2 || st === 'DELIVERY_ACK' || st === 'DELIVERED') {
+          statusStr = 'delivered';
+        } else if (st === 1 || st === 'SERVER_ACK' || st === 'SENT') {
+          statusStr = 'sent';
+        }
+
+        const { data: foundMsgs } = await supabaseAdmin
+          .from('messages')
+          .select('id, metadata')
+          .eq('external_id', waMsgId);
+
+        if (foundMsgs && foundMsgs.length > 0) {
+          const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3, played: 3 };
+          for (const m of foundMsgs) {
+            const currentRank = rank[m.metadata?.status] ?? 0;
+            const nextRank = rank[statusStr] ?? 1;
+            if (nextRank >= currentRank) {
+              const updatedMeta = { ...(m.metadata || {}), status: statusStr };
+              await supabaseAdmin.from('messages').update({ metadata: updatedMeta }).eq('id', m.id);
+              console.log(`✅ Status del mensaje ${m.id} (${waMsgId}) actualizado a: ${statusStr}`);
+            }
+          }
+        }
+      }
+      return res.status(200).json({ status: 'messages_updated' });
     }
 
     // Extraer ID de tenant numérico desde el nombre de instancia (ej. "hotel_1")
@@ -282,6 +318,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       console.log(`📩 Mensaje procesado de ${senderName} (${fromPhone}): ${textToSave.substring(0, 80)}... | Instancia: ${instance}`);
 
+      const waMsgId = msg.key?.id || null;
+
+      // Evitar duplicados si el mensaje saliente ya fue guardado por la App Web con su external_id
+      if (isFromMe && waMsgId) {
+        const { data: existingMsg } = await supabaseAdmin
+          .from('messages')
+          .select('id')
+          .eq('external_id', waMsgId)
+          .limit(1);
+        if (existingMsg && existingMsg.length > 0) {
+          console.log(`⏭️ Mensaje saliente ${waMsgId} ya registrado previamente (ID ${existingMsg[0].id}), omitiendo duplicado.`);
+          continue;
+        }
+      }
+
       // 1. Guardar mensaje en Supabase vía RPC atómica
       const { data: dbData, error: dbError } = await supabaseAdmin.rpc('save_whatsapp_message', {
         p_phone: fromPhone,
@@ -302,20 +353,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const msgId = dbData?.msg_id || dbData?.message_id;
       const resolvedTenantId = dbData?.tenant_id || tenantIdFromInstance;
 
-      // Actualizar tipo de mensaje, contenido multimedia y sender_type
+      // Actualizar tipo de mensaje, contenido multimedia, external_id y sender_type
       if (msgId) {
-        const updatePayload: any = {};
+        const updatePayload: any = {
+          external_id: waMsgId,
+          metadata: isFromMe ? { status: 'sent' } : mediaMetadata
+        };
         if ((mediaType === 'audio' || mediaType === 'image') && publicMediaUrl) {
           updatePayload.message_type = mediaType;
           updatePayload.content = publicMediaUrl;
-          updatePayload.metadata = mediaMetadata;
         }
         if (isFromMe) {
           updatePayload.sender_type = 'agent';
         }
-        if (Object.keys(updatePayload).length > 0) {
-          await supabaseAdmin.from('messages').update(updatePayload).eq('id', msgId);
-        }
+        await supabaseAdmin.from('messages').update(updatePayload).eq('id', msgId);
+      }
+
+      // Si el cliente respondió, marcar los mensajes salientes previos como leídos (doble check azul)
+      if (!isFromMe && convId) {
+        await supabaseAdmin
+          .from('messages')
+          .update({ metadata: { status: 'read' } })
+          .eq('conversation_id', convId)
+          .in('sender_type', ['agent', 'bot']);
       }
 
       // Asegurar el tenant_id en conversations y messages para Realtime
@@ -436,7 +496,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 if (convInfo?.mode === 'BOT') {
                   console.log(`🤖 Modo BOT activo: Enviando respuesta a WhatsApp (${fromPhone})...`);
-                  await fetch(`${evoUrl}/message/sendText/${instance}`, {
+                  const botSendRes = await fetch(`${evoUrl}/message/sendText/${instance}`, {
                     method: 'POST',
                     headers: {
                       'apikey': evoKey,
@@ -447,6 +507,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                       text: suggestion
                     })
                   });
+                  let botWaMsgId: string | null = null;
+                  if (botSendRes.ok) {
+                    const botSendData: any = await botSendRes.json().catch(() => null);
+                    botWaMsgId = botSendData?.key?.id || null;
+                  }
 
                   await supabaseAdmin.from('messages').insert([{
                     conversation_id: convId,
@@ -454,6 +519,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     sender_id: 'bot',
                     message_type: 'text',
                     content: suggestion,
+                    external_id: botWaMsgId,
+                    metadata: { status: 'sent' },
                     tenant_id: resolvedTenantId
                   }]);
 

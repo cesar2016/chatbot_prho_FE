@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, UserCircle2, Bot, Send, User, X,
-  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight,
+  Settings, Check, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight,
   CheckCircle2, AlertCircle, Phone, RefreshCw, Image as ImageIcon, Mic
 } from 'lucide-react';
 import { supabase } from './supabase';
@@ -314,7 +314,7 @@ export default function App() {
     }
   };
 
-  const sendToN8n = async (phone: string, text: string) => {
+  const sendToN8n = async (phone: string, text: string, dbMessageId?: number) => {
     try {
       const res = await fetch('/api/evolution/send', {
         method: 'POST',
@@ -322,7 +322,8 @@ export default function App() {
         body: JSON.stringify({
           phone: phone,
           message: text,
-          tenant_id: currentUser?.tenant_id || 'default'
+          tenant_id: currentUser?.tenant_id || 'default',
+          db_message_id: dbMessageId
         })
       });
 
@@ -369,14 +370,17 @@ export default function App() {
       .eq('status', 'PENDING');
       
     // 2. Guardar mensaje en Supabase
-    const { error: msgError } = await supabase.from('messages')
+    const { data: newMsg, error: msgError } = await supabase.from('messages')
       .insert([{
         conversation_id: activeConv.id,
         sender_type: 'agent',
         sender_id: String(currentUser.id),
         content: content,
+        metadata: { status: 'sent' },
         tenant_id: currentUser.tenant_id
-      }]);
+      }])
+      .select('id')
+      .single();
 
     if (msgError) {
       console.error('Error guardando sugerencia aprobada:', msgError);
@@ -387,8 +391,8 @@ export default function App() {
       .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
       .eq('id', activeConv.id);
 
-    // 4. Enviar a n8n (WhatsApp)
-    await sendToN8n(activeConv.phone, content);
+    // 4. Enviar a n8n / Evolution API (WhatsApp)
+    await sendToN8n(activeConv.phone, content, newMsg?.id);
 
     setRefreshTrigger(t => t + 1);
   };
@@ -432,18 +436,22 @@ export default function App() {
       sender_type: 'agent',
       sender_id: String(currentUser.id),
       content: content,
+      metadata: { status: 'pending' },
       created_at: new Date().toISOString()
     };
     setMessages(prev => [...prev, optimisticMsg]);
     
-    const { error: msgError } = await supabase.from('messages')
+    const { data: newMsg, error: msgError } = await supabase.from('messages')
       .insert([{
         conversation_id: activeConv.id,
         sender_type: 'agent',
         sender_id: String(currentUser.id),
         content: content,
+        metadata: { status: 'sent' },
         tenant_id: currentUser.tenant_id
-      }]);
+      }])
+      .select('id')
+      .single();
       
     if (msgError) {
       console.error('Error guardando mensaje manual en Supabase:', msgError);
@@ -454,8 +462,8 @@ export default function App() {
       .update({ mode: 'HUMAN', assigned_user_id: currentUser.id, last_message_at: new Date().toISOString() })
       .eq('id', activeConv.id);
 
-    // Enviar mensaje a n8n (WhatsApp)
-    await sendToN8n(activeConv.phone, content);
+    // Enviar mensaje a Evolution API (WhatsApp)
+    await sendToN8n(activeConv.phone, content, newMsg?.id);
 
     setActiveConv({ ...activeConv, mode: 'HUMAN', assigned_user_id: currentUser.id });
     setRefreshTrigger(t => t + 1);
@@ -489,20 +497,24 @@ export default function App() {
         sender_id: String(currentUser.id),
         message_type: type,
         content: publicMediaUrl,
+        metadata: { status: 'pending' },
         created_at: new Date().toISOString()
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
       // Guardar en Supabase
-      const { error: msgError } = await supabase.from('messages')
+      const { data: newMsg, error: msgError } = await supabase.from('messages')
         .insert([{
           conversation_id: activeConv.id,
           sender_type: 'agent',
           sender_id: String(currentUser.id),
           message_type: type,
           content: publicMediaUrl,
+          metadata: { status: 'sent' },
           tenant_id: currentUser.tenant_id
-        }]);
+        }])
+        .select('id')
+        .single();
 
       if (msgError) console.error('Error guardando mensaje multimedia en BD:', msgError);
 
@@ -518,7 +530,8 @@ export default function App() {
           phone: activeConv.phone,
           mediaUrl: publicMediaUrl,
           mediaType: type,
-          tenant_id: currentUser.tenant_id
+          tenant_id: currentUser.tenant_id,
+          db_message_id: newMsg?.id
         })
       });
 
@@ -1671,9 +1684,39 @@ Responde en el mismo idioma que el usuario.`
                           <p className="text-slate-800 dark:text-slate-200 leading-snug break-words whitespace-pre-wrap">{msg.content}</p>
                         );
                       })()}
-                      <div className={`flex ${isBot ? 'justify-end' : 'justify-start'} items-center gap-1 mt-1 text-[10px] ${isBot ? 'text-indigo-400' : 'text-slate-400'}`}>
-                        {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''} 
-                        {isBot && <CheckCheck size={14} className="text-blue-500" />}
+                      <div className={`flex ${isBot ? 'justify-end' : 'justify-start'} items-center gap-1.5 mt-1 text-[10px] ${isBot ? 'text-slate-500 dark:text-slate-400' : 'text-slate-400'}`}>
+                        <span>{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</span>
+                        {isBot && (() => {
+                          const status = msg.metadata?.status;
+                          const isTemp = String(msg.id).startsWith('temp-');
+
+                          if (isTemp || status === 'pending') {
+                            return (
+                              <span title="Enviando..." className="inline-flex items-center">
+                                <Clock size={12} className="text-slate-400 animate-spin" />
+                              </span>
+                            );
+                          }
+                          if (status === 'read' || status === 'played' || status === 3 || status === 4) {
+                            return (
+                              <span title="Leído / Reproducido" className="inline-flex items-center">
+                                <CheckCheck size={14} className="text-blue-500" />
+                              </span>
+                            );
+                          }
+                          if (status === 'delivered' || status === 2) {
+                            return (
+                              <span title="Entregado" className="inline-flex items-center">
+                                <CheckCheck size={14} className="text-slate-400 dark:text-slate-500" />
+                              </span>
+                            );
+                          }
+                          return (
+                            <span title="Enviado" className="inline-flex items-center">
+                              <Check size={14} className="text-slate-400 dark:text-slate-500" />
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>

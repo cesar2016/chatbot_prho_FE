@@ -115,7 +115,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             base64: true,
             events: [
               'MESSAGES_UPSERT',
-              'CONNECTION_UPDATE'
+              'MESSAGES_UPDATE',
+              'CONNECTION_UPDATE',
+              'SEND_MESSAGE'
             ]
           }
         })

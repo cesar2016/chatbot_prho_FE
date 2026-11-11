@@ -6,7 +6,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { phone, message, mediaUrl, mediaType, tenant_id } = req.body;
+  const { phone, message, mediaUrl, mediaType, tenant_id, db_message_id } = req.body;
 
   if (!phone || (!message && !mediaUrl)) {
     return res.status(400).json({ error: 'Faltan parámetros requeridos (phone y message o mediaUrl)' });
@@ -92,12 +92,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const data = await response.json();
+    const waMessageId = data?.key?.id || null;
+
+    if (db_message_id) {
+      await supabaseAdmin.from('messages').update({
+        external_id: waMessageId,
+        metadata: { status: 'sent' }
+      }).eq('id', db_message_id);
+    }
 
     // 2. Ensure tenant record has this instanceName registered
     if (tenant_id) {
       await supabaseAdmin.from('tenants').update({ kapso_phone_number_id: instanceName }).eq('id', tenant_id);
     }
-    return res.status(200).json({ status: 'success', data });
+    return res.status(200).json({ status: 'success', messageId: waMessageId, data });
 
   } catch (error: any) {
     console.error('Evolution Send Exception:', error);
