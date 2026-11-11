@@ -6,7 +6,8 @@ async function getMediaBase64(
   msg: any,
   instance: string,
   evoUrl: string,
-  evoKey: string
+  evoKey: string,
+  convertToMp4 = false
 ): Promise<{ base64: string; mimetype: string } | null> {
   // 1. Verificar si viene incluido directamente en el mensaje
   if (msg.base64) {
@@ -26,7 +27,7 @@ async function getMediaBase64(
         'apikey': evoKey,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ message: msg, convertToMp4: false })
+      body: JSON.stringify({ message: msg, convertToMp4 })
     });
 
     if (res.ok) {
@@ -206,14 +207,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // 🎙️ Procesamiento de Audio (Voz / WhatsApp Audio)
       if (isAudio && groqKey) {
         console.log(`🎙️ Procesando audio entrante de ${senderName} (${fromPhone})...`);
-        const media = await getMediaBase64(msg, instance, evoUrl, evoKey);
+        const media = await getMediaBase64(msg, instance, evoUrl, evoKey, true);
         if (media?.base64) {
           try {
             const clean = media.base64.replace(/^data:.*?;base64,/, '');
             const buffer = Buffer.from(clean, 'base64');
-            const audioPath = `audios/${Date.now()}_${fromPhone}.ogg`;
+            const ext = (media.mimetype && (media.mimetype.includes('mp4') || media.mimetype.includes('m4a'))) 
+              ? 'm4a' 
+              : (media.mimetype && media.mimetype.includes('mp3')) 
+                ? 'mp3' 
+                : 'ogg';
+            const audioPath = `audios/${Date.now()}_${fromPhone}.${ext}`;
             await supabaseAdmin.storage.from('chat-media').upload(audioPath, buffer, {
-              contentType: media.mimetype || 'audio/ogg',
+              contentType: media.mimetype || (ext === 'm4a' ? 'audio/mp4' : 'audio/ogg'),
               upsert: true
             });
             const supUrl = process.env.VITE_SUPABASE_URL || 'https://mtkzkuspevnytwuflfts.supabase.co';

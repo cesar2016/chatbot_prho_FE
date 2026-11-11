@@ -250,7 +250,18 @@ export default function App() {
         const assignedAgent = c.assigned_user_id ? usersData.find(u => u.id === c.assigned_user_id) : null;
         // Obtener último mensaje del array de mensajes
         const sortedMsgs = c.messages?.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) || [];
-        const lastMsgDesc = sortedMsgs.length > 0 ? sortedMsgs[0].content : 'Sin mensajes aún';
+        let lastMsgDesc = 'Sin mensajes aún';
+        if (sortedMsgs.length > 0) {
+          const m = sortedMsgs[0];
+          const cStr = String(m.content || '').trim();
+          if (m.message_type === 'audio' || cStr.includes('/chat-media/audios/') || /\.(ogg|mp3|m4a|wav|aac)(\?.*)?$/i.test(cStr)) {
+            lastMsgDesc = '🎙️ Nota de voz';
+          } else if (m.message_type === 'image' || cStr.includes('/chat-media/images/') || /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(cStr)) {
+            lastMsgDesc = '📷 Imagen';
+          } else {
+            lastMsgDesc = m.content || 'Sin mensajes aún';
+          }
+        }
 
         return {
           id: c.id,
@@ -1483,21 +1494,47 @@ Responde en el mismo idioma que el usuario.`
                     <div className={`${isBot ? 'bg-gradient-to-br from-indigo-100 to-blue-50 dark:from-indigo-900/60 dark:to-slate-800 border-indigo-50/50' : 'bg-white dark:bg-slate-800'} p-3.5 rounded-2xl ${isBot ? 'rounded-tr-sm' : 'rounded-tl-sm'} w-fit max-w-[75%] shadow hover:shadow-md transition-shadow relative group border dark:border-slate-700/50`}>
                       {/* Renderizado de mensaje: Audio, Imagen o Texto */}
                       {(() => {
-                        const contentStr = String(msg.content || '');
-                        const isAudio = msg.message_type === 'audio' || (contentStr.startsWith('https://') && (contentStr.includes('/chat-media/audios/') || contentStr.endsWith('.ogg') || contentStr.endsWith('.mp3') || contentStr.endsWith('.m4a')));
-                        const isImage = msg.message_type === 'image' || (contentStr.startsWith('https://') && (contentStr.includes('/chat-media/images/') || contentStr.match(/\.(jpg|jpeg|png|webp|gif)/i)));
+                        const contentStr = String(msg.content || '').trim();
+                        const isAudio = msg.message_type === 'audio' || 
+                          contentStr.includes('/chat-media/audios/') || 
+                          /\.(ogg|mp3|m4a|wav|aac)(\?.*)?$/i.test(contentStr);
+                        const isImage = msg.message_type === 'image' || 
+                          contentStr.includes('/chat-media/images/') || 
+                          /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(contentStr);
 
                         if (isAudio) {
+                          const isOgg = contentStr.includes('.ogg');
                           return (
-                            <div className="space-y-1.5 min-w-[240px]">
-                              <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-                                <Mic size={14} /> Nota de voz
+                            <div className="space-y-2 min-w-[260px] max-w-full">
+                              <div className="flex items-center justify-between gap-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                                <span className="flex items-center gap-1.5"><Mic size={15} /> Nota de voz</span>
+                                <a 
+                                  href={contentStr} 
+                                  target="_blank" 
+                                  rel="noreferrer" 
+                                  className="text-[10px] text-slate-400 hover:text-indigo-500 underline font-normal"
+                                >
+                                  Abrir audio
+                                </a>
                               </div>
-                              <audio controls src={contentStr} className="w-full h-9 rounded-lg" />
+                              <div className="bg-slate-50 dark:bg-slate-900/60 p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/60 shadow-inner">
+                                <audio 
+                                  controls 
+                                  preload="metadata" 
+                                  className="w-full h-10 outline-none"
+                                >
+                                  <source src={contentStr} type={isOgg ? 'audio/ogg; codecs=opus' : 'audio/mpeg'} />
+                                  <source src={contentStr} />
+                                  Tu navegador no soporta el reproductor de audio.
+                                </audio>
+                              </div>
                               {msg.metadata?.transcription && (
-                                <p className="text-[11px] text-slate-500 dark:text-slate-400 italic pt-1">
+                                <div className="text-[11px] text-slate-600 dark:text-slate-300 italic bg-white/80 dark:bg-slate-800/80 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/50 shadow-xs">
+                                  <span className="font-semibold not-italic block text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">
+                                    🎙️ Transcripción Whisper:
+                                  </span>
                                   "{msg.metadata.transcription}"
-                                </p>
+                                </div>
                               )}
                             </div>
                           );
@@ -1505,17 +1542,25 @@ Responde en el mismo idioma que el usuario.`
 
                         if (isImage) {
                           return (
-                            <div className="space-y-1.5 max-w-sm">
+                            <div className="space-y-2 max-w-sm">
                               <img 
                                 src={contentStr} 
                                 alt="Foto recibida" 
-                                className="w-full max-h-72 object-cover rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:opacity-95 shadow-sm"
+                                className="w-full max-h-80 object-cover rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:opacity-95 shadow-md transition-transform hover:scale-[1.01]"
                                 onClick={() => window.open(contentStr, '_blank')}
                               />
                               {msg.metadata?.caption && (
-                                <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                                <p className="text-xs text-slate-700 dark:text-slate-300 font-medium px-1">
                                   {msg.metadata.caption}
                                 </p>
+                              )}
+                              {msg.metadata?.interpretation && (
+                                <div className="text-[11px] text-slate-600 dark:text-slate-300 italic bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/50 shadow-xs">
+                                  <span className="font-semibold not-italic block text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">
+                                    👁️ Interpretación Groq Vision:
+                                  </span>
+                                  {msg.metadata.interpretation}
+                                </div>
                               )}
                             </div>
                           );
@@ -1776,12 +1821,22 @@ Responde en el mismo idioma que el usuario.`
                                     }`}>
                                       {/* Audio / Imagen / Texto en Historial */}
                                       {(() => {
-                                        const cStr = String(msg.content || '');
-                                        if (msg.message_type === 'audio' || cStr.includes('/chat-media/audios/')) {
-                                          return <audio controls src={cStr} className="w-48 h-8 rounded mt-1" />;
+                                        const cStr = String(msg.content || '').trim();
+                                        const isAudio = msg.message_type === 'audio' || cStr.includes('/chat-media/audios/') || /\.(ogg|mp3|m4a|wav|aac)(\?.*)?$/i.test(cStr);
+                                        const isImage = msg.message_type === 'image' || cStr.includes('/chat-media/images/') || /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(cStr);
+
+                                        if (isAudio) {
+                                          return (
+                                            <div className="space-y-1">
+                                              <audio controls preload="metadata" src={cStr} className="w-56 h-9 rounded mt-1 outline-none" />
+                                              {msg.metadata?.transcription && (
+                                                <p className="italic opacity-80 text-[10px]">"{msg.metadata.transcription}"</p>
+                                              )}
+                                            </div>
+                                          );
                                         }
-                                        if (msg.message_type === 'image' || cStr.includes('/chat-media/images/')) {
-                                          return <img src={cStr} alt="Imagen" className="max-h-32 rounded-lg mt-1 object-cover cursor-pointer" onClick={() => window.open(cStr, '_blank')} />;
+                                        if (isImage) {
+                                          return <img src={cStr} alt="Imagen" className="max-h-36 rounded-lg mt-1 object-cover cursor-pointer" onClick={() => window.open(cStr, '_blank')} />;
                                         }
                                         return <p>{msg.content}</p>;
                                       })()}
@@ -2047,9 +2102,29 @@ Responde en el mismo idioma que el usuario.`
                              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce delay-100"></div>
                              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce delay-200"></div>
                            </div>
-                        ) : (
-                          <p className="text-sm break-words whitespace-pre-wrap">{msg.content}</p>
-                        )}
+                        ) : (() => {
+                          const cStr = String(msg.content || '').trim();
+                          const isAudio = cStr.includes('/chat-media/audios/') || /\.(ogg|mp3|m4a|wav|aac)(\?.*)?$/i.test(cStr);
+                          const isImage = cStr.includes('/chat-media/images/') || /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(cStr);
+
+                          if (isAudio) {
+                            return (
+                              <div className="space-y-1.5 min-w-[220px]">
+                                <audio controls preload="metadata" src={cStr} className="w-full h-9 rounded outline-none" />
+                                <p className="text-xs break-words">{msg.content}</p>
+                              </div>
+                            );
+                          }
+                          if (isImage) {
+                            return (
+                              <div className="space-y-1.5 max-w-xs">
+                                <img src={cStr} alt="Test" className="max-h-48 rounded-lg object-cover cursor-pointer" onClick={() => window.open(cStr, '_blank')} />
+                                <p className="text-xs break-words">{msg.content}</p>
+                              </div>
+                            );
+                          }
+                          return <p className="text-sm break-words whitespace-pre-wrap">{msg.content}</p>;
+                        })()}
                       </div>
                     </div>
                   ))}
