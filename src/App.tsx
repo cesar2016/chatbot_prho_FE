@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, UserCircle2, Bot, Send, User, X,
-  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight
+  Settings, CheckCheck, Clock, Search, Bell, Menu, Sparkles, BookOpen, Database, MessageCircle, Trash2, ChevronLeft, Upload, Power, History, ChevronDown, ChevronRight,
+  CheckCircle2, AlertCircle, Phone, RefreshCw
 } from 'lucide-react';
 import { supabase } from './supabase';
 import bcrypt from 'bcryptjs';
@@ -50,6 +51,11 @@ export default function App() {
   const [onboardingQRUrl, setOnboardingQRUrl] = useState('');
   const [onboardingQRBase64, setOnboardingQRBase64] = useState('');
   const [onboardingStatus, setOnboardingStatus] = useState<string>('');
+  const [whatsappConnected, setWhatsappConnected] = useState<boolean>(() => !!currentUser?.tenantInfo?.phone);
+  const [whatsappPhone, setWhatsappPhone] = useState<string>(() => currentUser?.tenantInfo?.phone || '');
+  const [isDisconnectingWhatsapp, setIsDisconnectingWhatsapp] = useState<boolean>(false);
+  const [qrScanFeedback, setQrScanFeedback] = useState<{ type: 'success' | 'error'; message: string; phone?: string } | null>(null);
+  const pollingIntervalRef = useRef<any>(null);
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -173,7 +179,26 @@ export default function App() {
   }, [currentUser?.tenant_id]);
 
   useEffect(() => {
-    if (currentUser?.tenant_id) fetchData();
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isOnboardingModalOpen && pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  }, [isOnboardingModalOpen]);
+
+  useEffect(() => {
+    if (currentUser?.tenant_id) {
+      fetchData();
+      fetchWhatsappStatus();
+    }
     if (activeConv?.id) fetchMessages(activeConv.id);
   }, [refreshTrigger, activeConv?.id, currentUser?.tenant_id]);
 
@@ -186,10 +211,24 @@ export default function App() {
       query = query.or(`assigned_user_id.eq.${currentUser.id},assigned_user_id.is.null`);
     }
 
-    const [convsRes, usersRes] = await Promise.all([
+    const [convsRes, usersRes, tenantRes] = await Promise.all([
        query,
-       supabase.from('users').select('id, name, avatar').eq('tenant_id', currentUser.tenant_id)
+       supabase.from('users').select('id, name, avatar').eq('tenant_id', currentUser.tenant_id),
+       supabase.from('tenants').select('*').eq('id', currentUser.tenant_id).single()
     ]);
+
+    if (tenantRes.data) {
+      if (tenantRes.data.phone) {
+        setWhatsappPhone(tenantRes.data.phone);
+        setWhatsappConnected(true);
+      }
+      setCurrentUser((prev: any) => {
+        if (!prev) return prev;
+        const updated = { ...prev, tenantInfo: tenantRes.data };
+        localStorage.setItem('agentSession', JSON.stringify(updated));
+        return updated;
+      });
+    }
     
     const convs = convsRes.data;
     const usersData = usersRes.data || [];
@@ -675,11 +714,159 @@ Responde en el mismo idioma que el usuario.`
   };
 
 
+  const fetchWhatsappStatus = async () => {
+    if (!currentUser?.tenant_id) return;
+    try {
+      const res = await fetch(`/api/evolution/status?tenant_id=${currentUser.tenant_id}&t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setWhatsappConnected(data.connected);
+        if (data.phone) {
+          setWhatsappPhone(data.phone);
+          setCurrentUser((prev: any) => {
+            if (!prev) return prev;
+            const updated = {
+              ...prev,
+              tenantInfo: {
+                ...(prev.tenantInfo || {}),
+                phone: data.phone
+              }
+            };
+            localStorage.setItem('agentSession', JSON.stringify(updated));
+            return updated;
+          });
+        } else if (!data.connected) {
+          setWhatsappPhone('');
+        }
+        return data;
+      }
+    } catch (err) {
+      console.warn('Error verificando estado de WhatsApp:', err);
+    }
+  };
+
+  const handleDisconnectWhatsapp = async () => {
+    if (!currentUser?.tenant_id) return;
+    const confirmLogout = window.confirm(
+      `¿Deseas desconectar la línea de WhatsApp (${whatsappPhone || 'vinculada'})?\nTendrás que volver a escanear el código QR para reconectar el bot.`
+    );
+    if (!confirmLogout) return;
+
+    setIsDisconnectingWhatsapp(true);
+    try {
+      const res = await fetch('/api/evolution/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tenant_id: currentUser.tenant_id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setWhatsappConnected(false);
+        setWhatsappPhone('');
+        setOnboardingStatus('close');
+        setOnboardingQRBase64('');
+        setOnboardingQRUrl('');
+        setQrScanFeedback(null);
+        setCurrentUser((prev: any) => {
+          if (!prev) return prev;
+          const updated = {
+            ...prev,
+            tenantInfo: {
+              ...(prev.tenantInfo || {}),
+              phone: null
+            }
+          };
+          localStorage.setItem('agentSession', JSON.stringify(updated));
+          return updated;
+        });
+        alert('WhatsApp desconectado correctamente.');
+        setRefreshTrigger(t => t + 1);
+      } else {
+        alert('Error al desconectar: ' + (data?.error || 'Falló la desconexión'));
+      }
+    } catch (err: any) {
+      console.error('Error desconectando WhatsApp:', err);
+      alert('Error de red al intentar desconectar WhatsApp');
+    } finally {
+      setIsDisconnectingWhatsapp(false);
+    }
+  };
+
+  const startQrPolling = (tenantId: string | number) => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    let attempts = 0;
+    const maxAttempts = 40; // 40 * 2.5s = 100 segundos de espera
+
+    pollingIntervalRef.current = setInterval(async () => {
+      attempts++;
+      if (attempts > maxAttempts) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+        setQrScanFeedback({
+          type: 'error',
+          message: 'El código QR expiró sin ser escaneado. Por favor, genera uno nuevo para continuar.'
+        });
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/evolution/status?tenant_id=${tenantId}&t=${Date.now()}`);
+        if (res.ok) {
+          const statusData = await res.json();
+          if (statusData.connected) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+            setWhatsappConnected(true);
+            const connectedPhone = statusData.phone || 'WhatsApp';
+            setWhatsappPhone(connectedPhone);
+
+            setCurrentUser((prev: any) => {
+              if (!prev) return prev;
+              const updated = {
+                ...prev,
+                tenantInfo: {
+                  ...(prev.tenantInfo || {}),
+                  phone: connectedPhone
+                }
+              };
+              localStorage.setItem('agentSession', JSON.stringify(updated));
+              return updated;
+            });
+
+            // Requisito 3: Informar que fue exitoso y redireccionar al chat principal
+            setQrScanFeedback({
+              type: 'success',
+              message: `¡Vinculación Exitosa! Conectado correctamente con el número ${connectedPhone}`,
+              phone: connectedPhone
+            });
+
+            setTimeout(() => {
+              setIsOnboardingModalOpen(false);
+              setQrScanFeedback(null);
+              setActiveView('chat');
+              setRefreshTrigger(t => t + 1);
+            }, 2000);
+          }
+        }
+      } catch (pollErr) {
+        console.warn('Error en sondeo de QR:', pollErr);
+      }
+    }, 2500);
+  };
+
   const handleGenerateEvolutionOnboarding = async () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
     setIsOnboardingLoading(true);
     setOnboardingQRUrl('');
     setOnboardingQRBase64('');
     setOnboardingStatus('connecting');
+    setQrScanFeedback(null);
+
     try {
       const tenantId = currentUser?.tenant_id || 'default';
       const res = await fetch(`/api/evolution/qr?tenant_id=${tenantId}&t=${Date.now()}`, { cache: 'no-store' });
@@ -689,18 +876,37 @@ Responde en el mismo idioma que el usuario.`
         throw new Error(data?.error || `Error ${res.status}: Falló la conexión con Evolution API`);
       }
 
+      if (data.status === 'connected' || data.phone) {
+        setWhatsappConnected(true);
+        if (data.phone) setWhatsappPhone(data.phone);
+        setQrScanFeedback({
+          type: 'success',
+          message: '¡WhatsApp ya se encuentra conectado!',
+          phone: data.phone
+        });
+        setTimeout(() => {
+          setIsOnboardingModalOpen(false);
+          setActiveView('chat');
+        }, 1800);
+        return;
+      }
+
       if (data.base64) {
         setOnboardingQRBase64(data.base64);
       }
       if (data.code) {
         setOnboardingQRUrl(data.code);
       }
-      if (data.status === 'open' || data.status === 'connected') {
-        setOnboardingStatus('connected');
-      }
+
+      // Iniciar sondeo en segundo plano para detectar el escaneo en tiempo real
+      startQrPolling(tenantId);
+
     } catch (e: any) {
       console.error('Error generando QR de Evolution:', e);
-      alert('Hubo un error conectando con Evolution API: ' + e.message);
+      setQrScanFeedback({
+        type: 'error',
+        message: 'No se pudo generar el código QR: ' + (e.message || 'Error de conexión')
+      });
     } finally {
       setIsOnboardingLoading(false);
     }
@@ -859,13 +1065,46 @@ Responde en el mismo idioma que el usuario.`
                 <div className="flex items-center gap-3">
                   <img src="/logo-sidebar.png" alt="PrHo-BOT" className="h-8 object-contain drop-shadow-sm brightness-0 invert md:brightness-100 md:invert-0" />
                   {currentUser?.tenantInfo && (
-                    <div className="flex flex-col hidden sm:flex">
+                    <div className="flex flex-col">
                       <span className="text-[10px] uppercase font-bold text-indigo-300 md:text-indigo-500 tracking-wider leading-none">
                         {currentUser.tenantInfo.name}
                       </span>
-                      <span className="text-xs font-semibold text-white md:text-slate-700 leading-tight">
-                        {currentUser.tenantInfo.phone || currentUser.tenantInfo.kapso_phone_number_id || 'Sin número'}
-                      </span>
+                      {whatsappPhone || currentUser.tenantInfo.phone ? (
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {/* WhatsApp Icon */}
+                          <div className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 md:text-emerald-600 shrink-0" title="WhatsApp Conectado">
+                            <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                              <path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.582 2.128 2.182-.573c.978.58 1.911.928 3.145.929 3.178 0 5.767-2.587 5.768-5.766.001-3.187-2.575-5.77-5.764-5.771zm3.392 8.244c-.144.405-.837.774-1.17.824-.312.045-.694.072-2.18-.544-1.898-.787-3.119-2.73-3.214-2.856-.095-.127-.768-1.023-.768-1.95 0-.927.487-1.383.66-1.574.173-.191.378-.239.504-.239.127 0 .253.001.364.006.117.006.275-.044.43.329.16.386.544 1.328.592 1.425.048.097.08.21.016.338-.064.127-.096.206-.191.318-.095.111-.2.249-.286.334-.096.096-.196.2-.085.39.111.19.493.813 1.059 1.317.728.649 1.341.85 1.531.945.191.096.302.08.414-.048.111-.127.477-.556.604-.747.127-.19.254-.159.429-.095.175.064 1.112.524 1.303.62.19.095.318.143.366.222.048.08.048.461-.096.866zM12 2C6.477 2 2 6.477 2 12c0 1.891.524 3.662 1.435 5.179L2 22l4.962-1.399A9.957 9.957 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/>
+                            </svg>
+                          </div>
+                          <span className="text-xs font-bold text-white md:text-slate-800 dark:md:text-slate-200 leading-tight">
+                            {whatsappPhone || currentUser.tenantInfo.phone}
+                          </span>
+                          <button
+                            onClick={handleDisconnectWhatsapp}
+                            disabled={isDisconnectingWhatsapp}
+                            className="p-1 text-white/70 hover:text-rose-300 md:text-slate-400 md:hover:text-rose-600 hover:bg-white/10 md:hover:bg-rose-50 md:dark:hover:bg-rose-950/40 rounded transition-colors"
+                            title="Desconectar este WhatsApp"
+                          >
+                            <Power size={13} className={isDisconnectingWhatsapp ? 'animate-spin' : ''} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <div className="flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 md:text-amber-500 shrink-0" title="WhatsApp Desconectado">
+                            <svg className="w-3 h-3 fill-current opacity-70" viewBox="0 0 24 24">
+                              <path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.582 2.128 2.182-.573c.978.58 1.911.928 3.145.929 3.178 0 5.767-2.587 5.768-5.766.001-3.187-2.575-5.77-5.764-5.771zm3.392 8.244c-.144.405-.837.774-1.17.824-.312.045-.694.072-2.18-.544-1.898-.787-3.119-2.73-3.214-2.856-.095-.127-.768-1.023-.768-1.95 0-.927.487-1.383.66-1.574.173-.191.378-.239.504-.239.127 0 .253.001.364.006.117.006.275-.044.43.329.16.386.544 1.328.592 1.425.048.097.08.21.016.338-.064.127-.096.206-.191.318-.095.111-.2.249-.286.334-.096.096-.196.2-.085.39.111.19.493.813 1.059 1.317.728.649 1.341.85 1.531.945.191.096.302.08.414-.048.111-.127.477-.556.604-.747.127-.19.254-.159.429-.095.175.064 1.112.524 1.303.62.19.095.318.143.366.222.048.08.048.461-.096.866zM12 2C6.477 2 2 6.477 2 12c0 1.891.524 3.662 1.435 5.179L2 22l4.962-1.399A9.957 9.957 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/>
+                            </svg>
+                          </div>
+                          <button
+                            onClick={() => { setIsOnboardingModalOpen(true); handleGenerateEvolutionOnboarding(); }}
+                            className="text-xs font-semibold text-amber-200 md:text-amber-600 hover:underline leading-tight flex items-center gap-1"
+                            title="Haz clic para vincular WhatsApp por QR"
+                          >
+                            Desconectado · <span className="font-bold underline">Vincular</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1144,18 +1383,47 @@ Responde en el mismo idioma que el usuario.`
                 </div>
               </div>
 
-              {/* Onboarding QR */}
+              {/* Onboarding QR / WhatsApp Status */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-indigo-50 dark:bg-indigo-900/10 p-5 rounded-2xl border border-indigo-100 dark:border-indigo-500/20">
                  <div>
-                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1">WhatsApp Evolution API</h3>
-                   <p className="text-sm text-indigo-700 dark:text-indigo-400">Vincular una nueva cuenta de WhatsApp mediante código QR extraoficial.</p>
+                   <h3 className="text-lg font-bold text-indigo-900 dark:text-indigo-200 mb-1 flex items-center gap-2">
+                     <span>WhatsApp (Evolution API)</span>
+                     {whatsappConnected || whatsappPhone ? (
+                       <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-bold flex items-center gap-1">
+                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Conectado
+                       </span>
+                     ) : (
+                       <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold">
+                         Desconectado
+                       </span>
+                     )}
+                   </h3>
+                   <p className="text-sm text-indigo-700 dark:text-indigo-400">
+                     {whatsappConnected || whatsappPhone 
+                       ? `Conectado a la línea: ${whatsappPhone || currentUser?.tenantInfo?.phone || 'Activa'}`
+                       : 'Vincula una cuenta de WhatsApp escaneando el código QR para enviar y recibir mensajes.'
+                     }
+                   </p>
                  </div>
-                 <button 
-                  onClick={() => { setIsOnboardingModalOpen(true); handleGenerateEvolutionOnboarding(); }} 
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition shrink-0 whitespace-nowrap"
-                 >
-                   Generar QR
-                 </button>
+                 <div className="flex items-center gap-2">
+                   {whatsappConnected || whatsappPhone ? (
+                     <button 
+                       onClick={handleDisconnectWhatsapp}
+                       disabled={isDisconnectingWhatsapp}
+                       className="bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold py-2.5 px-5 rounded-xl border border-rose-200 transition shrink-0 whitespace-nowrap flex items-center gap-1.5 text-sm"
+                     >
+                       <Power size={14} className={isDisconnectingWhatsapp ? 'animate-spin' : ''} />
+                       Desconectar
+                     </button>
+                   ) : (
+                     <button 
+                       onClick={() => { setIsOnboardingModalOpen(true); handleGenerateEvolutionOnboarding(); }} 
+                       className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition shrink-0 whitespace-nowrap text-sm"
+                     >
+                       Vincular con QR
+                     </button>
+                   )}
+                 </div>
               </div>
             </div>
           </div>
@@ -1587,7 +1855,13 @@ Responde en el mismo idioma que el usuario.`
                 Vincular WhatsApp (Evolution API)
               </h2>
               <button 
-                onClick={() => setIsOnboardingModalOpen(false)} 
+                onClick={() => {
+                  setIsOnboardingModalOpen(false);
+                  if (pollingIntervalRef.current) {
+                    clearInterval(pollingIntervalRef.current);
+                    pollingIntervalRef.current = null;
+                  }
+                }} 
                 className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-500"
               >
                 <X size={20} />
@@ -1595,23 +1869,83 @@ Responde en el mismo idioma que el usuario.`
             </div>
             
             <div className="p-8 flex flex-col items-center text-center">
-              {isOnboardingLoading ? (
-                <div className="py-12 flex flex-col items-center">
-                  <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-600 rounded-full animate-spin mb-4"></div>
-                  <p className="font-bold text-slate-600 dark:text-slate-300">Generando QR de vinculación...</p>
-                  <p className="text-xs text-slate-400 mt-1">Conectando con Evolution API...</p>
-                </div>
-              ) : onboardingStatus === 'connected' ? (
-                <div className="py-8 flex flex-col items-center">
-                  <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-4 text-2xl font-bold">
-                    ✓
+              {/* 1. Éxito de escaneo y vinculación */}
+              {qrScanFeedback?.type === 'success' ? (
+                <div className="py-6 flex flex-col items-center animate-in zoom-in duration-300">
+                  <div className="w-20 h-20 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-5 text-4xl font-bold shadow-lg shadow-emerald-500/20">
+                    <CheckCircle2 size={44} />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-2">¡WhatsApp Conectado!</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Tu número de WhatsApp ya se encuentra vinculado activamente y listo para responder mensajes.
+                  <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-2">¡Vinculación Exitosa!</h3>
+                  <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 mb-1">
+                    {qrScanFeedback.phone ? `Línea conectada: ${qrScanFeedback.phone}` : 'Dispositivo vinculado correctamente'}
+                  </p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    Redirigiendo a tu chat principal...
                   </p>
                 </div>
+              ) : qrScanFeedback?.type === 'error' ? (
+                /* 2. Error en el escaneo con opción de volver a escanear */
+                <div className="py-6 flex flex-col items-center animate-in zoom-in duration-300">
+                  <div className="w-20 h-20 bg-rose-100 dark:bg-rose-900/30 text-rose-600 rounded-full flex items-center justify-center mb-5 text-3xl font-bold shadow-lg shadow-rose-500/10">
+                    <AlertCircle size={44} />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Error al Vincular</h3>
+                  <p className="text-sm font-medium text-rose-600 dark:text-rose-400 mb-6 max-w-xs leading-relaxed">
+                    {qrScanFeedback.message}
+                  </p>
+                  <button 
+                    onClick={handleGenerateEvolutionOnboarding}
+                    className="w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw size={18} />
+                    Volver a escanear
+                  </button>
+                </div>
+              ) : isOnboardingLoading ? (
+                /* 3. Cargando QR */
+                <div className="py-12 flex flex-col items-center">
+                  <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-600 rounded-full animate-spin mb-4"></div>
+                  <p className="font-bold text-slate-600 dark:text-slate-300">Generando código QR...</p>
+                  <p className="text-xs text-slate-400 mt-1">Conectando con Evolution API...</p>
+                </div>
+              ) : (whatsappConnected || onboardingStatus === 'connected') ? (
+                /* 4. Ya conectado */
+                <div className="py-6 flex flex-col items-center">
+                  <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-4 text-2xl font-bold">
+                    <CheckCheck size={32} />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-1">¡WhatsApp Conectado!</h3>
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-300 font-bold text-sm my-3">
+                    <Phone size={14} />
+                    <span>{whatsappPhone || currentUser?.tenantInfo?.phone || 'Línea Activa'}</span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">
+                    Tu línea está vinculada activamente y lista para responder mensajes.
+                  </p>
+
+                  <div className="flex flex-col gap-2.5 w-full">
+                    <button
+                      onClick={() => {
+                        setIsOnboardingModalOpen(false);
+                        setActiveView('chat');
+                      }}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow transition"
+                    >
+                      Ir al Chat Principal
+                    </button>
+                    <button
+                      onClick={handleDisconnectWhatsapp}
+                      disabled={isDisconnectingWhatsapp}
+                      className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold rounded-xl border border-rose-200 transition flex items-center justify-center gap-2"
+                    >
+                      <Power size={14} className={isDisconnectingWhatsapp ? 'animate-spin' : ''} />
+                      Desconectar este WhatsApp
+                    </button>
+                  </div>
+                </div>
               ) : (onboardingQRBase64 || onboardingQRUrl) ? (
+                /* 5. Código QR activo y esperando escaneo */
                 <>
                   <p className="text-slate-600 dark:text-slate-400 mb-4 font-medium text-xs leading-relaxed text-left bg-emerald-50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-800/30 w-full">
                     <span className="font-bold block mb-1 text-emerald-700 dark:text-emerald-400">Instrucciones de vinculación:</span>
@@ -1632,12 +1966,18 @@ Responde en el mismo idioma que el usuario.`
                     )}
                   </div>
 
+                  <div className="flex items-center justify-center gap-2 text-xs font-medium text-slate-500 mb-4 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span>Esperando escaneo desde tu celular...</span>
+                  </div>
+
                   <div className="flex gap-2 w-full mb-3">
                     <button 
                       onClick={handleGenerateEvolutionOnboarding}
                       className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow transition-colors flex items-center justify-center gap-2"
                     >
-                      Actualizar Código QR
+                      <RefreshCw size={14} />
+                      Regenerar Código QR
                     </button>
                   </div>
                   
@@ -1646,17 +1986,19 @@ Responde en el mismo idioma que el usuario.`
                   </p>
                 </>
               ) : (
+                /* 6. Fallo de carga */
                 <div className="py-8 flex flex-col items-center">
                   <div className="w-12 h-12 bg-rose-100 dark:bg-rose-900/30 text-rose-600 rounded-full flex items-center justify-center mb-3 font-bold text-xl">
-                    !
+                    <AlertCircle size={28} />
                   </div>
                   <p className="text-sm font-bold text-rose-600 dark:text-rose-400 mb-4">
                     No se pudo cargar el código QR en este momento.
                   </p>
                   <button 
                     onClick={handleGenerateEvolutionOnboarding}
-                    className="py-2.5 px-6 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition"
+                    className="py-2.5 px-6 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition flex items-center gap-2"
                   >
+                    <RefreshCw size={14} />
                     Reintentar
                   </button>
                 </div>

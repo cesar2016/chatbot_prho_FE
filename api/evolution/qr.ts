@@ -10,7 +10,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  const tenantId = req.query.tenant_id as string;
+  const tenantId = (req.query.tenant_id as string) || '1';
   if (!tenantId) {
     return res.status(400).json({ error: 'Falta tenant_id' });
   }
@@ -21,6 +21,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const instanceName = `hotel_${tenantId.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 
   try {
+    // 0. Verificar si la instancia ya está conectada activamente
+    try {
+      const checkRes = await fetch(`${evoUrl}/instance/fetchInstances?instanceName=${instanceName}`, {
+        headers: { 'apikey': evoKey }
+      });
+      if (checkRes.ok) {
+        const checkList: any[] = await checkRes.json();
+        const existingInst = Array.isArray(checkList)
+          ? checkList.find((i: any) => i.name === instanceName) || checkList[0]
+          : null;
+        if (existingInst && existingInst.connectionStatus === 'open') {
+          let rawPhone = existingInst.ownerJid ? existingInst.ownerJid.replace('@s.whatsapp.net', '').replace(/\D/g, '') : '';
+          let formattedPhone = rawPhone ? `+${rawPhone}` : null;
+          return res.status(200).json({
+            instanceName,
+            status: 'connected',
+            phone: formattedPhone,
+            profileName: existingInst.profileName || null,
+            message: 'Instancia ya conectada activamente'
+          });
+        }
+      }
+    } catch (checkErr) {
+      console.warn('Advertencia comprobando estado previo de la instancia:', checkErr);
+    }
+
     // 1. Intentar obtener el QR directamente de la instancia si ya existe
     let connectRes = await fetch(`${evoUrl}/instance/connect/${instanceName}`, {
       headers: {
@@ -88,7 +114,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             byEvents: false,
             base64: false,
             events: [
-              'MESSAGES_UPSERT'
+              'MESSAGES_UPSERT',
+              'CONNECTION_UPDATE'
             ]
           }
         })

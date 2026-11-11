@@ -46,6 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 2. Ensure tenant record has this instanceName registered
     if (tenant_id) {
       await supabaseAdmin.from('tenants').update({ kapso_phone_number_id: instanceName }).eq('id', tenant_id);
+    }
     return res.status(200).json({ status: 'success', data });
 
   } catch (error: any) {
