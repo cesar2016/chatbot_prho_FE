@@ -199,21 +199,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       let textToSave = rawText;
       let queryForRAG = rawText;
+      let mediaType: 'text' | 'audio' | 'image' = 'text';
+      let publicMediaUrl = '';
+      let mediaMetadata: any = null;
 
       // 🎙️ Procesamiento de Audio (Voz / WhatsApp Audio)
       if (isAudio && groqKey) {
         console.log(`🎙️ Procesando audio entrante de ${senderName} (${fromPhone})...`);
         const media = await getMediaBase64(msg, instance, evoUrl, evoKey);
         if (media?.base64) {
+          try {
+            const clean = media.base64.replace(/^data:.*?;base64,/, '');
+            const buffer = Buffer.from(clean, 'base64');
+            const audioPath = `audios/${Date.now()}_${fromPhone}.ogg`;
+            await supabaseAdmin.storage.from('chat-media').upload(audioPath, buffer, {
+              contentType: media.mimetype || 'audio/ogg',
+              upsert: true
+            });
+            const supUrl = process.env.VITE_SUPABASE_URL || 'https://mtkzkuspevnytwuflfts.supabase.co';
+            publicMediaUrl = `${supUrl}/storage/v1/object/public/chat-media/${audioPath}`;
+            mediaType = 'audio';
+          } catch (storageErr) {
+            console.error('Error subiendo audio a storage:', storageErr);
+          }
+
           const transcription = await transcribeAudio(media.base64, media.mimetype, groqKey);
           if (transcription) {
-            textToSave = `🎙️ [Audio transcrito]: "${transcription}"`;
             queryForRAG = transcription;
-            console.log(`✅ Audio transcrito con éxito: "${transcription}"`);
+            mediaMetadata = { transcription };
+            console.log(`✅ Audio transcrito para RAG: "${transcription}"`);
           } else {
-            textToSave = `🎙️ [Nota de voz recibida]`;
             queryForRAG = 'El cliente envió una nota de voz.';
           }
+          textToSave = publicMediaUrl || `🎙️ [Nota de voz recibida]`;
         } else {
           textToSave = `🎙️ [Nota de voz recibida]`;
           queryForRAG = 'El cliente envió una nota de voz.';
@@ -225,17 +243,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const media = await getMediaBase64(msg, instance, evoUrl, evoKey);
         const caption = msg.message?.imageMessage?.caption || '';
         if (media?.base64) {
+          try {
+            const clean = media.base64.replace(/^data:.*?;base64,/, '');
+            const buffer = Buffer.from(clean, 'base64');
+            const ext = (media.mimetype && media.mimetype.includes('png')) ? 'png' : 'jpg';
+            const imgPath = `images/${Date.now()}_${fromPhone}.${ext}`;
+            await supabaseAdmin.storage.from('chat-media').upload(imgPath, buffer, {
+              contentType: media.mimetype || 'image/jpeg',
+              upsert: true
+            });
+            const supUrl = process.env.VITE_SUPABASE_URL || 'https://mtkzkuspevnytwuflfts.supabase.co';
+            publicMediaUrl = `${supUrl}/storage/v1/object/public/chat-media/${imgPath}`;
+            mediaType = 'image';
+          } catch (storageErr) {
+            console.error('Error subiendo imagen a storage:', storageErr);
+          }
+
           const interpretation = await interpretImage(media.base64, caption, groqKey);
           if (interpretation) {
-            textToSave = caption
-              ? `📷 [Imagen]: "${caption}"\n\n🔍 [Interpretación IA]: ${interpretation}`
-              : `📷 [Imagen enviada]\n\n🔍 [Interpretación IA]: ${interpretation}`;
             queryForRAG = caption ? `${caption}. ${interpretation}` : interpretation;
-            console.log(`✅ Imagen interpretada con éxito: "${interpretation.substring(0, 100)}..."`);
+            mediaMetadata = { caption, interpretation };
+            console.log(`✅ Imagen interpretada para RAG: "${interpretation.substring(0, 100)}..."`);
           } else {
-            textToSave = caption ? `📷 [Imagen]: "${caption}"` : `📷 [Imagen recibida]`;
             queryForRAG = caption || 'El cliente envió una imagen.';
+            mediaMetadata = { caption };
           }
+          textToSave = publicMediaUrl || (caption ? `📷 [Imagen]: "${caption}"` : `📷 [Imagen recibida]`);
         } else {
           textToSave = caption ? `📷 [Imagen]: "${caption}"` : `📷 [Imagen recibida]`;
           queryForRAG = caption || 'El cliente envió una imagen.';
@@ -265,6 +298,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const convId = dbData?.conv_id || dbData?.conversation_id;
       const msgId = dbData?.msg_id || dbData?.message_id;
       const resolvedTenantId = dbData?.tenant_id || tenantIdFromInstance;
+
+      // Si es audio o imagen, actualizar message_type, content con la URL pública y metadata
+      if (msgId && (mediaType === 'audio' || mediaType === 'image') && publicMediaUrl) {
+        await supabaseAdmin.from('messages').update({
+          message_type: mediaType,
+          content: publicMediaUrl,
+          metadata: mediaMetadata
+        }).eq('id', msgId);
+      }
 
       // Asegurar el tenant_id en conversations y messages para Realtime
       if (convId && resolvedTenantId) {

@@ -1481,7 +1481,50 @@ Responde en el mismo idioma que el usuario.`
                 return (
                   <div key={msg.id || index} className={`flex ${isBot ? 'justify-end' : 'justify-start'}`}>
                     <div className={`${isBot ? 'bg-gradient-to-br from-indigo-100 to-blue-50 dark:from-indigo-900/60 dark:to-slate-800 border-indigo-50/50' : 'bg-white dark:bg-slate-800'} p-3.5 rounded-2xl ${isBot ? 'rounded-tr-sm' : 'rounded-tl-sm'} w-fit max-w-[75%] shadow hover:shadow-md transition-shadow relative group border dark:border-slate-700/50`}>
-                      <p className="text-slate-800 dark:text-slate-200 leading-snug break-words whitespace-pre-wrap">{msg.content}</p>
+                      {/* Renderizado de mensaje: Audio, Imagen o Texto */}
+                      {(() => {
+                        const contentStr = String(msg.content || '');
+                        const isAudio = msg.message_type === 'audio' || (contentStr.startsWith('https://') && (contentStr.includes('/chat-media/audios/') || contentStr.endsWith('.ogg') || contentStr.endsWith('.mp3') || contentStr.endsWith('.m4a')));
+                        const isImage = msg.message_type === 'image' || (contentStr.startsWith('https://') && (contentStr.includes('/chat-media/images/') || contentStr.match(/\.(jpg|jpeg|png|webp|gif)/i)));
+
+                        if (isAudio) {
+                          return (
+                            <div className="space-y-1.5 min-w-[240px]">
+                              <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                                <Mic size={14} /> Nota de voz
+                              </div>
+                              <audio controls src={contentStr} className="w-full h-9 rounded-lg" />
+                              {msg.metadata?.transcription && (
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 italic pt-1">
+                                  "{msg.metadata.transcription}"
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        if (isImage) {
+                          return (
+                            <div className="space-y-1.5 max-w-sm">
+                              <img 
+                                src={contentStr} 
+                                alt="Foto recibida" 
+                                className="w-full max-h-72 object-cover rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:opacity-95 shadow-sm"
+                                onClick={() => window.open(contentStr, '_blank')}
+                              />
+                              {msg.metadata?.caption && (
+                                <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                                  {msg.metadata.caption}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <p className="text-slate-800 dark:text-slate-200 leading-snug break-words whitespace-pre-wrap">{msg.content}</p>
+                        );
+                      })()}
                       <div className={`flex ${isBot ? 'justify-end' : 'justify-start'} items-center gap-1 mt-1 text-[10px] ${isBot ? 'text-indigo-400' : 'text-slate-400'}`}>
                         {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''} 
                         {isBot && <CheckCheck size={14} className="text-blue-500" />}
@@ -1731,7 +1774,17 @@ Responde en el mismo idioma que el usuario.`
                                         ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-900 dark:text-indigo-200'
                                         : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                                     }`}>
-                                      <p>{msg.content}</p>
+                                      {/* Audio / Imagen / Texto en Historial */}
+                                      {(() => {
+                                        const cStr = String(msg.content || '');
+                                        if (msg.message_type === 'audio' || cStr.includes('/chat-media/audios/')) {
+                                          return <audio controls src={cStr} className="w-48 h-8 rounded mt-1" />;
+                                        }
+                                        if (msg.message_type === 'image' || cStr.includes('/chat-media/images/')) {
+                                          return <img src={cStr} alt="Imagen" className="max-h-32 rounded-lg mt-1 object-cover cursor-pointer" onClick={() => window.open(cStr, '_blank')} />;
+                                        }
+                                        return <p>{msg.content}</p>;
+                                      })()}
                                       <span className="text-[10px] opacity-50 mt-0.5 block">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : ''}</span>
                                     </div>
                                   </div>
