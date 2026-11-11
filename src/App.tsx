@@ -479,6 +479,44 @@ export default function App() {
     { role: 'bot', content: 'Soy el asistente simulado. ¡Hazme una pregunta sobre las reglas o la disponibilidad del hotel que acabas de cargar!' }
   ]);
 
+  const fetchVoyageEmbedding = async (
+    text: string,
+    onRateLimit?: (seconds: number) => void
+  ): Promise<number[]> => {
+    const apiKey = import.meta.env.VITE_VOYAGE_API_KEY;
+    if (!apiKey) throw new Error('Falta VITE_VOYAGE_API_KEY en las variables de entorno.');
+
+    const callVoyage = async () => {
+      return await fetch('https://api.voyageai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ input: [text], model: 'voyage-2' })
+      });
+    };
+
+    let res = await callVoyage();
+
+    // Voyage AI free tier without card is throttled to 3 RPM (1 req every 20s)
+    if (res.status === 429) {
+      if (onRateLimit) onRateLimit(15);
+      await new Promise(r => setTimeout(r, 15000));
+      res = await callVoyage();
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      if (res.status === 429) {
+        throw new Error('⏳ Límite de Voyage AI (3 consultas/minuto en cuenta gratuita sin tarjeta). Aguardá 20 segundos para el próximo mensaje, o asociá un medio de pago en https://dashboard.voyageai.com/billing para desbloquear el límite estándar sin costo adicional (tus 200M de tokens gratis siguen vigentes).');
+      }
+      throw new Error(data.detail || JSON.stringify(data));
+    }
+
+    return data.data[0].embedding;
+  };
+
   const handleSendTestMessage = async () => {
     if (!testInput.trim()) return;
     
@@ -491,18 +529,11 @@ export default function App() {
 
     try {
       // 1. Embed user query with Voyage AI
-      const voyageRes = await fetch('https://api.voyageai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_VOYAGE_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ input: [userMsg.content], model: 'voyage-2' })
+      const embedding = await fetchVoyageEmbedding(userMsg.content, (sec) => {
+        setTestMessages(prev => prev.map(m => m.isLoading ? { ...m, content: `⏳ Límite de tasa de Voyage AI (3 RPM). Reintentando en ${sec}s...` } : m));
       });
-      const voyageData = await voyageRes.json();
-      if (!voyageRes.ok) throw new Error('Error Voyage AI: ' + JSON.stringify(voyageData));
       
-      const vectorString = '[' + voyageData.data[0].embedding.join(',') + ']';
+      const vectorString = '[' + embedding.join(',') + ']';
 
       // 2. Retrieve top-3 knowledge chunks from Supabase
       const { data: docs, error } = await supabase
@@ -578,22 +609,12 @@ Responde en el mismo idioma que el usuario.`
   const handleSaveKnowledge = async () => {
     if (!knowledgeText.trim()) return;
     setIsSaving(true);
-    setSaveMessage('');
+    setSaveMessage('Vectorizando contenido con Voyage AI...');
     try {
-      // 1. Get query embedding from Voyage AI directly (Prototyping)
-      const voyageRes = await fetch('https://api.voyageai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_VOYAGE_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ input: [knowledgeText], model: 'voyage-2' })
+      const embedding = await fetchVoyageEmbedding(knowledgeText, (sec) => {
+        setSaveMessage(`⏳ Límite de tasa de Voyage AI. Reintentando en ${sec}s...`);
       });
-      
-      if (!voyageRes.ok) throw new Error('Error al conectar con VoyageAI');
-      const voyageData = await voyageRes.json();
-      const vector = voyageData.data[0].embedding;
-      const vectorString = '[' + vector.join(',') + ']';
+      const vectorString = '[' + embedding.join(',') + ']';
 
       const { error } = await supabase
         .from('knowledge_documents')
@@ -605,9 +626,9 @@ Responde en el mismo idioma que el usuario.`
       
       setSaveMessage('¡Conocimiento vectorizado y guardado con éxito!');
       setKnowledgeText('');
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setSaveMessage('Error: No se pudo conectar con Supabase o Voyage.');
+      setSaveMessage(`⚠️ ${error.message || 'Error: No se pudo conectar con Supabase o Voyage.'}`);
     } finally {
       setIsSaving(false);
     }
