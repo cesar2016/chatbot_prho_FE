@@ -24,6 +24,9 @@ export default function App() {
   const [activeConv, setActiveConv] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
+  const replyInputRef = useRef<HTMLInputElement>(null);
+  const [isEditingGreeting, setIsEditingGreeting] = useState(false);
+  const customGreetingRef = useRef<Record<string, string>>({});
   const chatImageInputRef = useRef<HTMLInputElement>(null);
   const chatAudioInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
@@ -158,11 +161,36 @@ export default function App() {
     };
   }, [unreadCounts, conversations]);
 
-  // Clear unreads for active conversation when tab becomes visible
+  const getGreetingStorageKey = (user: any) =>
+    user ? `custom_greeting_${user.tenant_id || 'default'}_${user.id || 'agent'}` : 'custom_greeting_default';
+
+  const getDefaultGreeting = (user: any) => {
+    const agentName = user?.name || 'Agente';
+    const tenantName = user?.tenantInfo?.name ? ` de ${user.tenantInfo.name}` : '';
+    return `Hola, soy ${agentName}${tenantName}. ¿En qué puedo ayudarte?`;
+  };
+
+  const getCurrentGreeting = (user: any) => {
+    const key = getGreetingStorageKey(user);
+    if (customGreetingRef.current[key]) return customGreetingRef.current[key];
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        customGreetingRef.current[key] = saved;
+        return saved;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return getDefaultGreeting(user);
+  };
+
+  // Clear unreads and refresh active chat messages when tab becomes visible
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden && activeConv?.id) {
-         setUnreadCounts((prev: any) => ({ ...prev, [activeConv.id]: 0 }));
+        setUnreadCounts((prev: any) => ({ ...prev, [activeConv.id]: 0 }));
+        setRefreshTrigger(t => t + 1);
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -190,6 +218,8 @@ export default function App() {
               return currentActive; // don't change activeConv
             });
           }
+        } else if (payload.eventType === 'UPDATE' && payload.new?.id) {
+          setMessages(prev => prev.map(m => (m.id === payload.new.id ? { ...m, ...payload.new } : m)));
         }
         setRefreshTrigger(t => t + 1);
       })
@@ -204,6 +234,48 @@ export default function App() {
 
     return () => { supabase.removeChannel(channel); }
   }, [currentUser?.tenant_id]);
+
+  // Respaldo ligero para actualizar checks (enviado -> entregado -> leído) si Realtime UPDATE tarda o se pierde
+  const pendingStatusMsgIds = messages
+    .slice(-6)
+    .filter(m => (m.sender_type === 'agent' || m.sender_type === 'bot') && !String(m.id).startsWith('temp-') && m.metadata?.status !== 'read' && m.metadata?.status !== 'played')
+    .map(m => m.id)
+    .join(',');
+
+  useEffect(() => {
+    if (!activeConv?.id || !pendingStatusMsgIds) return;
+    let ticks = 0;
+    const convId = activeConv.id;
+    const interval = setInterval(async () => {
+      if (document.hidden) return;
+      ticks += 1;
+      if (ticks > 20) {
+        clearInterval(interval);
+        return;
+      }
+      const { data: latest } = await supabase
+        .from('messages')
+        .select('id, metadata, external_id')
+        .eq('conversation_id', convId)
+        .in('id', pendingStatusMsgIds.split(',').map(Number).filter(Boolean));
+      if (latest && latest.length > 0) {
+        const byId = new Map(latest.map((item: any) => [item.id, item]));
+        setMessages(prev => {
+          let changed = false;
+          const next = prev.map(m => {
+            const upd: any = byId.get(m.id);
+            if (upd && (upd.metadata?.status !== m.metadata?.status || upd.external_id !== m.external_id)) {
+              changed = true;
+              return { ...m, metadata: upd.metadata, external_id: upd.external_id };
+            }
+            return m;
+          });
+          return changed ? next : prev;
+        });
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [activeConv?.id, pendingStatusMsgIds]);
 
   useEffect(() => {
     return () => {
@@ -427,6 +499,16 @@ export default function App() {
     if (!activeConv || !replyText.trim() || !currentUser) return;
     
     const content = replyText.trim();
+    if (isEditingGreeting) {
+      const greetingKey = getGreetingStorageKey(currentUser);
+      customGreetingRef.current[greetingKey] = content;
+      try {
+        localStorage.setItem(greetingKey, content);
+      } catch (e) {
+        console.warn('No se pudo guardar el saludo personalizado:', e);
+      }
+      setIsEditingGreeting(false);
+    }
     setReplyText('');
 
     // Optimistic update: show message immediately in the panel
@@ -1835,9 +1917,21 @@ Responde en el mismo idioma que el usuario.`
               />
 
               <button 
-                title="Mensaje de Presentación"
-                onClick={() => setReplyText(`Hola Soy ${currentUser?.name || 'Agente'} del hotel Colinas, en que puedo ayudarte?`)}
-                className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl hover:bg-slate-200 transition-colors text-lg"
+                type="button"
+                title={isEditingGreeting
+                  ? 'Editando saludo: modifícalo en la caja y al enviarlo quedará guardado para próximos usos'
+                  : 'Insertar saludo (puedes editarlo y al enviarlo quedará guardado como saludo por defecto)'}
+                onClick={() => {
+                  const greetingToUse = getCurrentGreeting(currentUser);
+                  setReplyText(greetingToUse);
+                  setIsEditingGreeting(true);
+                  setTimeout(() => replyInputRef.current?.focus(), 0);
+                }}
+                className={`p-3 rounded-xl transition-all text-lg ${
+                  isEditingGreeting
+                    ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 ring-2 ring-indigo-500'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
               >
                 👋
               </button>
@@ -1863,8 +1957,9 @@ Responde en el mismo idioma que el usuario.`
               </button>
 
               <input 
+                ref={replyInputRef}
                 type="text" 
-                placeholder={isUploadingMedia ? "Subiendo y enviando archivo multimedia..." : "Escribe un mensaje al cliente..."} 
+                placeholder={isUploadingMedia ? "Subiendo y enviando archivo multimedia..." : (isEditingGreeting ? "Edita tu saludo y presiona enviar para guardarlo..." : "Escribe un mensaje al cliente...")} 
                 disabled={isUploadingMedia}
                 className="flex-1 px-5 py-3 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-slate-800 dark:text-slate-200 disabled:opacity-60" 
                 value={replyText}

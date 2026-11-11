@@ -161,18 +161,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         let statusStr = 'sent';
         const st = item?.status ?? update?.status;
-        if (st === 4 || st === 'PLAYED' || st === 3 || st === 'READ') {
+        if (st === 5 || st === 4 || st === 'PLAYED' || st === 'READ') {
           statusStr = 'read';
-        } else if (st === 2 || st === 'DELIVERY_ACK' || st === 'DELIVERED') {
+        } else if (st === 3 || st === 'DELIVERY_ACK' || st === 'DELIVERED') {
           statusStr = 'delivered';
-        } else if (st === 1 || st === 'SERVER_ACK' || st === 'SENT') {
+        } else if (st === 2 || st === 1 || st === 'SERVER_ACK' || st === 'SENT') {
           statusStr = 'sent';
         }
 
-        const { data: foundMsgs } = await supabaseAdmin
+        let { data: foundMsgs } = await supabaseAdmin
           .from('messages')
           .select('id, metadata')
           .eq('external_id', waMsgId);
+
+        // Evitar condición de carrera si Evolution emite MESSAGES_UPDATE antes de que send.ts guarde external_id
+        if (!foundMsgs || foundMsgs.length === 0) {
+          await new Promise(r => setTimeout(r, 900));
+          const retryRes = await supabaseAdmin
+            .from('messages')
+            .select('id, metadata')
+            .eq('external_id', waMsgId);
+          foundMsgs = retryRes.data;
+        }
 
         if (foundMsgs && foundMsgs.length > 0) {
           const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3, played: 3 };
