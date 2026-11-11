@@ -1774,9 +1774,14 @@ Responde en el mismo idioma que el usuario.`
                 <button
                   onClick={() => setIsResetModalOpen(true)}
                   disabled={knowledgeDocs.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-sm"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                    knowledgeDocs.length === 0
+                      ? 'bg-slate-100 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800 cursor-not-allowed'
+                      : 'bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 border-rose-200 dark:border-rose-800 hover:shadow-sm cursor-pointer'
+                  }`}
+                  title={knowledgeDocs.length === 0 ? "La memoria ya está en cero (0)" : "Borrar todos los fragmentos"}
                 >
-                  <Trash2 size={14} /> Resetear Memoria (Poner a cero 0)
+                  <Trash2 size={14} /> {knowledgeDocs.length === 0 ? 'Memoria en cero (0)' : 'Resetear Memoria (Volver a 0)'}
                 </button>
               </div>
             </div>
@@ -1808,8 +1813,12 @@ Responde en el mismo idioma que el usuario.`
                   <button 
                     onClick={() => setIsResetModalOpen(true)}
                     disabled={knowledgeDocs.length === 0}
-                    className="sm:w-auto px-5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-bold py-4 rounded-2xl flex items-center justify-center gap-2 border border-rose-200 dark:border-rose-800/60 shadow-sm transform hover:-translate-y-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none"
-                    title="Vaciar toda la memoria del bot a 0">
+                    className={`sm:w-auto px-5 font-bold py-4 rounded-2xl flex items-center justify-center gap-2 border shadow-sm transition-all ${
+                      knowledgeDocs.length === 0
+                        ? 'bg-slate-100 dark:bg-slate-800/50 text-slate-400 dark:text-slate-600 border-slate-200 dark:border-slate-800 cursor-not-allowed'
+                        : 'bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 border-rose-200 dark:border-rose-800/60 transform hover:-translate-y-1 active:scale-95 cursor-pointer'
+                    }`}
+                    title={knowledgeDocs.length === 0 ? "La memoria ya está en cero (0)" : "Vaciar toda la memoria del bot a 0"}>
                     <Trash2 size={20} /> Reset (0)
                   </button>
                 </div>
